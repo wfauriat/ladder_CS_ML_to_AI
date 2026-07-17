@@ -1,0 +1,824 @@
+import React, { useState, useEffect, useRef, useCallback } from "react";
+
+/* ============================================================
+   THE LADDER — a lecture instrument
+   Spine: 1 thesis + 8 rungs, each a compressed fragment.
+   Flesh: probes ("tell me more", "give me an example", ...)
+   answered from a cache seeded with precomputed text and
+   extended live by a model call.
+
+   SWAPPING THE MODEL:
+   All generation goes through callModel() below. Inside
+   claude.ai it hits the Anthropic API (no key needed here).
+   To run against a local model (e.g. Qwen via Ollama or
+   llama.cpp, OpenAI-compatible), drop this component into a
+   plain Vite app and replace callModel() with the commented
+   variant underneath it. Nothing else changes.
+   ============================================================ */
+
+const C = {
+  bg: "#191410",
+  panel: "#231C15",
+  panelEdge: "#3B2F21",
+  text: "#EFE7DA",
+  muted: "#9C8D78",
+  faint: "#6E6252",
+  amber: "#F2A93B",      // phosphor amber — stored / precomputed
+  green: "#9FD8A0",      // phosphor green — live generation
+  red: "#E08A6D",
+};
+
+const DISPLAY = "'Archivo', system-ui, sans-serif";
+const MONO = "'IBM Plex Mono', ui-monospace, monospace";
+
+/* ------------------------------------------------------------
+   THE SPINE — order is a data question, not a code question.
+   Reorder, reword, add or drop rungs by editing this array.
+   fragment/sub: what the room sees.
+   anchor: what only the model sees — intended meaning + limits.
+   seeds: precomputed answers (warmed cache).
+   ------------------------------------------------------------ */
+const SLIDES = [
+  {
+    id: "thesis",
+    eyebrow: "Thesis",
+    fragment: "Transforming representations of information, under constraints of resources.",
+    sub: "The whole field in one sentence. Every rung below is this sentence wearing different clothes.",
+    anchor:
+      "The root claim of the lecture. Computer science, software engineering and data science reduce to three words: encode something about the world as symbols (representation), transform those symbols by mechanical rules (computation), and pay for it in time, memory, energy and human effort (resources/constraints). Every later slide instantiates one of these words. Stay at this framing level; do not descend into hardware detail yet.",
+    seeds: {
+      more:
+        "Every rung of this lecture is this sentence wearing different clothes. \u201cIt\u2019s all switches\u201d is about representation \u2014 how the world becomes symbols. \u201cTiny dumb steps\u201d is about transformation \u2014 what the machine does to them. \u201cFetching is slow\u201d is about resources \u2014 what it all costs. Hold the sentence and the field stops being a pile of acronyms: databases represent, algorithms transform, and every engineering war story is, underneath, a fight with a constraint.",
+      example:
+        "You hum a melody into your phone and it names the song. The sound becomes millions of numbers \u2014 a representation. Those numbers are boiled down to a compact fingerprint and matched against a vast index \u2014 a transformation. And it answers in two seconds on a pocket battery only because someone fought for every step and every byte \u2014 the constraints. One party trick, all three words.",
+    },
+  },
+  {
+    id: "switches",
+    eyebrow: "Rung 1 · the machine",
+    fragment: "It\u2019s all switches.",
+    sub: "On or off, 1 or 0 \u2014 everything else is huge piles of on/off, dressed up.",
+    anchor:
+      "Billions of transistors acting as extremely fast switches with no moving parts. Two agreed states are enough to encode any number, letter, image or sound, because bits compose. There is no picture or song inside the machine \u2014 only bit patterns plus conventions for reading them. Stay classical; no quantum computing detours.",
+    seeds: {
+      more:
+        "A transistor is a switch with no moving parts: a voltage on one wire decides whether current may pass through another. That is the entire trick. Your phone holds tens of billions of them, each able to flip billions of times per second. Two agreed voltage levels become 0 and 1; eight of those make a byte; a few million bytes make a photo. The machine never stores a picture \u2014 only bit patterns, plus a decoder ring everyone agreed on.",
+      example:
+        "Press the letter A and your keyboard sends 01000001 \u2014 a pure convention fixed decades ago. The screen showing that A holds millions of pixels, each just three numbers for red, green and blue. A song is thousands of numbers per second describing air pressure. Text, image, sound \u2014 different worlds, one substrate: piles of on/off, read through the right convention.",
+    },
+  },
+  {
+    id: "steps",
+    eyebrow: "Rung 2 · the machine",
+    fragment: "Only tiny dumb steps, insanely fast.",
+    sub: "Add, compare, move. Billions per second, stacked so high they look like intelligence.",
+    anchor:
+      "A processor executes only trivial operations: arithmetic, comparison, moving data, jumping to another instruction. Nothing it does is individually clever; apparent intelligence is composition at scale. An algorithm is a recipe made of these steps, and how the number of steps grows with input size decides what is feasible at all.",
+    seeds: {
+      more:
+        "A processor\u2019s whole day: fetch an instruction, do it, move on \u2014 where \u201cdo it\u201d means add two numbers, compare them, copy one somewhere, or jump to another instruction. That is roughly the full vocabulary. What looks smart is composition: a spell checker, a route planner, a chess engine are towers of these steps. And the recipe matters enormously \u2014 a clever one turns a million-year computation into a one-second one. That is what \u201calgorithm\u201d means in practice.",
+      example:
+        "How does a map app pick the fastest route among absurdly many possibilities? Not by insight. By a recipe \u2014 always extend the cheapest path found so far, never revisit a corner \u2014 built entirely from compares, adds and moves. The magic is not in any step; it is a good recipe multiplied by a few billion steps per second.",
+    },
+  },
+  {
+    id: "fetching",
+    eyebrow: "Rung 3 · resources",
+    fragment: "Fetching is the slow part, not thinking.",
+    sub: "Fast memory is tiny and near; big memory is far. Speed is mostly keeping data close.",
+    anchor:
+      "Memory is a hierarchy from small-fast (on-chip caches) to large-slow (disk, network). Moving data to the processor usually costs far more than the computation itself. This is why caching, locality and \u201cdon\u2019t redo work\u201d dominate performance, and why feeding data to GPUs matters as much as their arithmetic.",
+    seeds: {
+      more:
+        "A processor adds numbers in under a nanosecond, but fetching a value from main memory can cost hundreds of times that \u2014 from disk or network, millions. So chips carry caches: tiny, expensive memories glued next to the cores, holding whatever was touched recently. Most performance engineering is arranging work so the needed data is already close \u2014 and most \u201cwhy is this slow?\u201d mysteries end at a fetch, not at a computation.",
+      example:
+        "Picture a chef whose stove is one step away but whose pantry is across town. The cooking was never the problem. Real case: a program reading a huge table row by row can run fifty times faster than one hopping between columns \u2014 identical arithmetic, identical result. The fast one simply keeps grabbing neighbors that are already sitting in the cache.",
+    },
+  },
+  {
+    id: "abstraction",
+    eyebrow: "Rung 4 · taming complexity",
+    fragment: "Hide complexity behind interfaces \u2014 and every abstraction leaks.",
+    sub: "Each layer trusts the one below without knowing it. Until it can\u2019t.",
+    anchor:
+      "Abstraction is the master move: define what a component does, hide how. Layers stack \u2014 hardware, OS, languages, libraries \u2014 and each level trusts the one below. But hidden complexity is deferred, not gone: performance cliffs, strange failures and security holes are the layer below poking through. Hence the craftsman\u2019s rule: understand one layer below.",
+    seeds: {
+      more:
+        "An interface is a contract: it promises what a component does and hides how. That is what lets millions build on code they have never read \u2014 you trust the layer below the way you trust a wall socket. But the hiding is a deferral, not a deletion. The day a query is mysteriously slow or a library fails weirdly, that is the layer below poking through \u2014 a leak. Hence the craftsman\u2019s rule: use the top, understand one layer below.",
+      example:
+        "Your phone\u2019s cloud photos look like a folder \u2014 an interface. Underneath: data centers, sync protocols, retries over flaky radio. The abstraction holds right up until you board a plane and the \u201cfolder\u201d is suddenly empty \u2014 the network below leaked through. Nothing broke; a hidden assumption surfaced. Every \u201cit works on my machine\u201d story is this, somewhere in the stack.",
+    },
+  },
+  {
+    id: "tradeoffs",
+    eyebrow: "Rung 5 · the recurring law",
+    fragment: "Everything is a tradeoff.",
+    sub: "Fast, cheap, correct, simple, scalable \u2014 choose your sacrifices, on purpose.",
+    anchor:
+      "Almost nothing in computing is simply good: time vs space, safety vs speed, expressive vs precise, consistent vs available. Good engineering is choosing the sacrifice deliberately and measuring instead of guessing \u2014 intuition about cost is usually wrong, so optimize the common, measured case. This idea recurs at every rung; here it gets its own.",
+    seeds: {
+      more:
+        "Time versus space: precompute and store, or compute on demand. Safety versus speed: check everything, or go fast and trust. Consistency versus availability: agree perfectly, or answer immediately. You cannot maximize them all. The skill is picking the sacrifice that fits the job \u2014 and measuring rather than guessing, because intuition about cost is reliably wrong. Bad systems are not the ones that made tradeoffs; they are the ones that made them by accident.",
+      example:
+        "Why does a banking app log you out constantly while a game never does? Not incompetence \u2014 a different sacrifice: security bought with your convenience. Why does a search engine answer instantly yet sometimes show slightly stale results? Freshness sold for speed. Once you see the currency being traded, product decisions everywhere stop looking arbitrary.",
+    },
+  },
+  {
+    id: "learning",
+    eyebrow: "Rung 6 · data",
+    fragment: "Learning means guessing well on the unseen.",
+    sub: "Not memorizing yesterday\u2019s answers \u2014 generalizing to tomorrow\u2019s.",
+    anchor:
+      "Machine learning replaces hand-written rules with patterns found in data. Anything can become points in a space where similar things sit close. Success is graded only on held-out, unseen cases. Patterns are correlations, not reasons \u2014 prediction is not explanation \u2014 and a model cannot beat its data: garbage in, garbage out, and the world drifts after deployment.",
+    seeds: {
+      more:
+        "Instead of writing rules (\u201cspam contains these words\u201d), you show the machine examples and let it find the pattern. Everything becomes points in a space \u2014 emails, faces, sentences \u2014 where similar things sit close. The trap is memorization: a model can ace every example it saw and fail the first new one. So we grade only on held-back, unseen cases. And the patterns are correlations, not reasons \u2014 the model knows what goes together, never why.",
+      example:
+        "Train a model on photos to tell huskies from wolves and it may perform brilliantly \u2014 until you discover it learned \u201csnow in the background means wolf.\u201d It aced everything it had seen using a shortcut that collapses on anything unseen. The whole discipline in one story: generalization is the goal, correlation is the trap, and the held-out test is the only honest judge.",
+    },
+  },
+  {
+    id: "autocomplete",
+    eyebrow: "Rung 7 · modern AI",
+    fragment: "Modern AI is autocomplete, trained on almost everything.",
+    sub: "Guess the next word well enough, and grammar, facts and reasoning arrive as side effects. Scale is the engine.",
+    anchor:
+      "Large language models are trained to predict the next token over vast text. Past a certain scale, new abilities appear as if from nowhere. The engine is massive parallel arithmetic on GPUs \u2014 the AI boom is a GPU boom. Economics: learn once at staggering cost, freeze the model, use it many times cheaply, increasingly acting rather than just answering.",
+    seeds: {
+      more:
+        "The training task is almost embarrassingly simple: given some text, predict the next word \u2014 billions of times, over most of the written internet. Done well enough, grammar, facts, style and something like reasoning emerge as side effects; nobody programmed them in. The engine is scale: massive parallel arithmetic on GPUs, which is why the AI boom is a hardware boom. Then the economics flip \u2014 train once at staggering cost, freeze it, use it a billion times for pennies.",
+      example:
+        "Ask a model to draft a contrite email to your landlord. There is no landlord module. It has simply seen so much apology, negotiation and email that continuing your words plausibly, one token at a time, produces one. The eerie part: the same next-word engine also debugs code and passes medical exams. One trick, staggering scale, side effects all the way up.",
+    },
+  },
+  {
+    id: "probably",
+    eyebrow: "Rung 8 · the new layer",
+    fragment: "The new layer only promises to be probably right.",
+    sub: "We are swapping exact translators between layers for statistical ones. Keep the verifying step.",
+    anchor:
+      "Every previous layer of the stack was a deterministic translation \u2014 a compiler is right, or it is a compiler bug. AI translation from intent to code, goal to plan, question to decision, guesses where every layer below computed. It fails quietly and fluently: confident, well-formed, wrong. The gain is reach and speed; the price is that trust must now be earned by verification. This very slide deck runs on such a layer \u2014 the lecturer on stage is the verifying step.",
+    seeds: {
+      more:
+        "A compiler translates code the same way every time \u2014 exact, inspectable, boringly right. The new translators \u2014 intent to code, question to decision \u2014 are statistical: right most of the time, by design. And they fail differently: not with a crash, but fluently \u2014 confident, well-formed, wrong. Old layers failed loudly; this one fails politely. So the one step we must not automate away is the one every deterministic layer let us forget: checking.",
+      example:
+        "This slide is the example. The panel you are reading is produced by exactly the kind of probabilistic layer the fragment describes. It has been right all lecture \u2014 has it? The lecturer standing here is the verifying step: reading, judging, correcting in front of you. Keep that role, and the new layer is a triumph. Automate it away, and fluent wrongness ships to production.",
+    },
+  },
+];
+
+/* ------------------------------------------------------------
+   PROBES — each is a prompt template. Add or reword freely.
+   ------------------------------------------------------------ */
+const ACTIONS = [
+  {
+    id: "more",
+    label: "Tell me more",
+    task: "Deepen the idea one level: reveal the mechanism behind the fragment, still fully graspable by a lay listener.",
+  },
+  {
+    id: "example",
+    label: "Give me an example",
+    task: "Give ONE concrete, everyday example that instantiates the fragment \u2014 a small scenario or story, not a definition.",
+  },
+  {
+    id: "differently",
+    label: "Explain it differently",
+    task: "Re-explain the fragment through a completely different analogy or register than anything used before. Surprise, but stay strictly accurate.",
+  },
+  {
+    id: "bite",
+    label: "Where does it bite?",
+    task: "Show where this idea bites in the real world: one concrete failure, cost or consequence of ignoring it.",
+  },
+];
+
+function buildPrompt(slide, action, previousTexts) {
+  const avoid =
+    previousTexts.length > 0
+      ? "\nDo NOT repeat the framing, analogies or examples of these earlier answers:\n" +
+        previousTexts
+          .map((t, i) => `--- earlier answer ${i + 1} ---\n${t}`)
+          .join("\n")
+          .slice(0, 2400)
+      : "";
+  return `You are the live explanation engine embedded in a lecture deck titled "How computers and data work", for an intelligent lay audience. The lecturer is projecting this fragment on screen:
+
+FRAGMENT: "${slide.fragment}"
+SUBTEXT: "${slide.sub}"
+
+INTENDED MEANING \u2014 stay strictly inside this, it is the ground truth of the slide:
+${slide.anchor}
+
+TASK: ${action.task}${avoid}
+
+RULES:
+- At most 110 words. The text is projected and read aloud, so it must breathe.
+- Concrete and vivid. Any technical term gets an instant plain-words translation.
+- Plain prose only: no headings, no bullet points, no markdown.
+- Do not restate the fragment; add to it.`;
+}
+
+/* ------------------------------------------------------------
+   MODEL ADAPTERS — the ONLY place that knows about an endpoint.
+   Two engines, chosen live from the UI:
+     • local — Qwen via Ollama (OpenAI-compatible, on localhost)
+     • cloud — Claude via the Anthropic API (needs an API key)
+   Everything else is engine-agnostic: it calls
+   callModel(prompt, { mode, apiKey }) and gets text back.
+   ------------------------------------------------------------ */
+// qwen3:8b routes its chain-of-thought into a separate `reasoning` field and
+// leaves `content` empty until it stops thinking — which the small token budget
+// often starves. The -nothink variant answers directly, so `content` is filled.
+const MODEL_LOCAL = "qwen3-nothink:latest";
+const MODEL_CLOUD = "claude-sonnet-5";
+
+const MODES = {
+  local: { id: "local", label: "local · qwen", note: "Ollama · localhost:11434" },
+  cloud: { id: "cloud", label: "cloud · claude", note: "Anthropic API · api.anthropic.com" },
+};
+
+/* Local engine — Qwen via Ollama.
+   Run Ollama with the dev origin allowed so the browser may call it:
+     OLLAMA_ORIGINS="http://localhost:5173" ollama serve
+   and pull the model once:  ollama pull qwen3:8b */
+async function callLocal(prompt) {
+  const response = await fetch("http://localhost:11434/v1/chat/completions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      model: MODEL_LOCAL,
+      max_tokens: 800,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!response.ok) throw new Error(`Ollama answered ${response.status}`);
+  const data = await response.json();
+  const raw = data.choices?.[0]?.message?.content ?? "";
+  // Defensively strip any inline <think>…</think> some qwen builds still emit.
+  const text = raw.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+  if (!text) throw new Error("Empty completion (model returned only reasoning)");
+  return text;
+}
+
+/* Cloud engine — Claude via the Anthropic API.
+   Running outside claude.ai (this local Vite app) means calling the API
+   directly from the browser: that needs an API key AND the explicit
+   "dangerous-direct-browser-access" opt-in header to clear CORS.
+   The key lives only in this browser (see the key bar in the UI). */
+async function callCloud(prompt, apiKey) {
+  if (!apiKey) throw new Error("no API key set — add one in the key bar");
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true",
+    },
+    body: JSON.stringify({
+      model: MODEL_CLOUD,
+      max_tokens: 1000,
+      messages: [{ role: "user", content: prompt }],
+    }),
+  });
+  if (!response.ok) throw new Error(`Anthropic answered ${response.status}`);
+  const data = await response.json();
+  const text = data.content
+    .filter((b) => b.type === "text")
+    .map((b) => b.text)
+    .join("\n")
+    .trim();
+  if (!text) throw new Error("Empty completion");
+  return text;
+}
+
+/* Dispatcher — pick the engine for this call. */
+function callModel(prompt, { mode, apiKey }) {
+  return mode === "cloud" ? callCloud(prompt, apiKey) : callLocal(prompt);
+}
+
+/* ------------------------------------------------------------ */
+
+export default function LectureLadder() {
+  const [slideIdx, setSlideIdx] = useState(0);
+  // history[slideId][actionId] = [{ text, source: 'precomputed' | 'live' }]
+  const [history, setHistory] = useState(() => {
+    const h = {};
+    for (const s of SLIDES) {
+      h[s.id] = {};
+      for (const a of ACTIONS) {
+        h[s.id][a.id] = s.seeds && s.seeds[a.id]
+          ? [{ text: s.seeds[a.id], source: "precomputed" }]
+          : [];
+      }
+    }
+    return h;
+  });
+  const [active, setActive] = useState({}); // slideId -> actionId
+  const [viewIdx, setViewIdx] = useState({}); // `${slideId}:${actionId}` -> number
+  const [loading, setLoading] = useState(null); // actionId while generating
+  const [elapsed, setElapsed] = useState(0);
+  const [error, setError] = useState(null);
+  const [typing, setTyping] = useState(null); // { key, full, shown }
+  const typingTimer = useRef(null);
+  const reduceMotion = useRef(
+    typeof window !== "undefined" &&
+      window.matchMedia &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+  );
+
+  // engine selection: 'local' (Ollama) or 'cloud' (Anthropic)
+  const [mode, setMode] = useState(() => {
+    try {
+      const saved = localStorage.getItem("ladder.mode");
+      if (saved === "local" || saved === "cloud") return saved;
+    } catch {}
+    return "local";
+  });
+  const [apiKey, setApiKey] = useState(() => {
+    try {
+      const env = import.meta.env?.VITE_ANTHROPIC_API_KEY;
+      if (env) return env;
+      return localStorage.getItem("ladder.apiKey") || "";
+    } catch {}
+    return "";
+  });
+  const [keyDraft, setKeyDraft] = useState("");
+  const [editingKey, setEditingKey] = useState(false);
+
+  useEffect(() => {
+    try { localStorage.setItem("ladder.mode", mode); } catch {}
+  }, [mode]);
+  useEffect(() => {
+    try { if (apiKey) localStorage.setItem("ladder.apiKey", apiKey); } catch {}
+  }, [apiKey]);
+
+  const saveKey = () => {
+    const k = keyDraft.trim();
+    if (!k) return;
+    setApiKey(k);
+    setEditingKey(false);
+    setKeyDraft("");
+    setError(null);
+  };
+
+  const slide = SLIDES[slideIdx];
+  const activeActionId = active[slide.id] || null;
+  const activeAction = ACTIONS.find((a) => a.id === activeActionId) || null;
+  const entries = activeActionId ? history[slide.id][activeActionId] : [];
+  const vKey = activeActionId ? `${slide.id}:${activeActionId}` : null;
+  const shownIdx =
+    vKey != null && viewIdx[vKey] != null
+      ? viewIdx[vKey]
+      : Math.max(0, entries.length - 1);
+  const entry = entries[shownIdx] || null;
+
+  /* keyboard slide navigation */
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === "ArrowRight")
+        setSlideIdx((i) => Math.min(SLIDES.length - 1, i + 1));
+      if (e.key === "ArrowLeft") setSlideIdx((i) => Math.max(0, i - 1));
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  /* elapsed-seconds counter while generating (patience UI) */
+  useEffect(() => {
+    if (loading == null) return;
+    setElapsed(0);
+    const t = setInterval(() => setElapsed((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [loading]);
+
+  /* typewriter reveal — live generations only */
+  const startTyping = useCallback((key, full) => {
+    if (reduceMotion.current) return;
+    if (typingTimer.current) clearInterval(typingTimer.current);
+    const pieces = full.split(/(\s+)/);
+    let i = 0;
+    setTyping({ key, full, shown: "" });
+    typingTimer.current = setInterval(() => {
+      i = Math.min(pieces.length, i + 2);
+      const shown = pieces.slice(0, i).join("");
+      setTyping({ key, full, shown });
+      if (i >= pieces.length) {
+        clearInterval(typingTimer.current);
+        typingTimer.current = null;
+        setTyping(null);
+      }
+    }, 30);
+  }, []);
+
+  const skipTyping = () => {
+    if (typingTimer.current) clearInterval(typingTimer.current);
+    typingTimer.current = null;
+    setTyping(null);
+  };
+
+  const generate = useCallback(
+    async (s, a) => {
+      setError(null);
+      setLoading(a.id);
+      try {
+        const prev = history[s.id][a.id].map((e) => e.text);
+        const text = await callModel(buildPrompt(s, a, prev), { mode, apiKey });
+        setHistory((h) => {
+          const next = { ...h, [s.id]: { ...h[s.id] } };
+          next[s.id][a.id] = [...h[s.id][a.id], { text, source: "live", via: mode }];
+          return next;
+        });
+        const newIdx = history[s.id][a.id].length;
+        setViewIdx((v) => ({ ...v, [`${s.id}:${a.id}`]: newIdx }));
+        startTyping(`${s.id}:${a.id}:${newIdx}`, text);
+      } catch (err) {
+        setError(err.message || "The model endpoint did not respond.");
+      } finally {
+        setLoading(null);
+      }
+    },
+    [history, startTyping, mode, apiKey]
+  );
+
+  const selectAction = (a) => {
+    setError(null);
+    setActive((m) => ({ ...m, [slide.id]: a.id }));
+    if (history[slide.id][a.id].length === 0 && loading == null) {
+      generate(slide, a);
+    }
+  };
+
+  const browse = (delta) => {
+    if (!vKey) return;
+    skipTyping();
+    const next = Math.min(entries.length - 1, Math.max(0, shownIdx + delta));
+    setViewIdx((v) => ({ ...v, [vKey]: next }));
+  };
+
+  const goto = (i) => {
+    skipTyping();
+    setError(null);
+    setSlideIdx(i);
+  };
+
+  const entryKey = vKey ? `${vKey}:${shownIdx}` : null;
+  const isTypingThis = typing && typing.key === entryKey;
+  const displayText = entry ? (isTypingThis ? typing.shown : entry.text) : "";
+
+  return (
+    <div
+      className="min-h-screen w-full flex flex-col"
+      style={{ background: C.bg, color: C.text, fontFamily: DISPLAY }}
+    >
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;700;900&family=IBM+Plex+Mono:wght@400;500&display=swap');
+        .rung-btn:focus-visible, .probe-btn:focus-visible, .nav-btn:focus-visible {
+          outline: 2px solid ${C.amber}; outline-offset: 2px;
+        }
+        @keyframes blinkCursor { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+        .cursor-blink { animation: blinkCursor 0.9s step-end infinite; }
+        @media (prefers-reduced-motion: reduce) { .cursor-blink { animation: none; } }
+      `}</style>
+
+      <div className="flex flex-1 min-h-0">
+        {/* ladder — vertical rung navigation */}
+        <nav
+          aria-label="Rungs"
+          className="hidden md:flex flex-col-reverse justify-center items-center gap-3 px-5"
+          style={{ borderRight: `1px solid ${C.panelEdge}` }}
+        >
+          {SLIDES.map((s, i) => (
+            <button
+              key={s.id}
+              className="rung-btn block"
+              onClick={() => goto(i)}
+              aria-label={s.fragment}
+              aria-current={i === slideIdx ? "true" : undefined}
+              title={s.fragment}
+              style={{
+                width: i === slideIdx ? 34 : 20,
+                height: 3,
+                borderRadius: 2,
+                background: i === slideIdx ? C.amber : i < slideIdx ? C.muted : C.panelEdge,
+                transition: "all 0.25s",
+                cursor: "pointer",
+                border: "none",
+                padding: 0,
+              }}
+            />
+          ))}
+        </nav>
+
+        {/* main slide */}
+        <main className="flex-1 flex flex-col px-6 md:px-14 py-8 md:py-10 min-w-0">
+          {/* eyebrow + engine toggle */}
+          <div
+            className="flex items-center gap-4 mb-5 flex-wrap"
+            style={{ fontFamily: MONO, fontSize: 12, letterSpacing: "0.18em" }}
+          >
+            <span style={{ color: C.amber, textTransform: "uppercase" }}>
+              {slide.eyebrow}
+            </span>
+            <span style={{ color: C.faint }}>
+              {slideIdx === 0 ? "base of the ladder" : `${slideIdx} / ${SLIDES.length - 1}`}
+            </span>
+            <div className="ml-auto flex items-center gap-1" role="group" aria-label="Engine">
+              {Object.values(MODES).map((m) => {
+                const on = mode === m.id;
+                return (
+                  <button
+                    key={m.id}
+                    className="probe-btn"
+                    onClick={() => setMode(m.id)}
+                    disabled={loading != null}
+                    title={m.note}
+                    aria-pressed={on}
+                    style={{
+                      fontFamily: MONO,
+                      fontSize: 11,
+                      letterSpacing: "0.08em",
+                      textTransform: "uppercase",
+                      padding: "5px 10px",
+                      borderRadius: 4,
+                      border: `1px solid ${on ? C.amber : C.panelEdge}`,
+                      background: on ? "rgba(242,169,59,0.08)" : "transparent",
+                      color: on ? C.amber : C.faint,
+                      cursor: loading != null ? "wait" : "pointer",
+                      transition: "all 0.15s",
+                    }}
+                  >
+                    {m.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* key bar — only relevant in cloud mode */}
+          {mode === "cloud" && (
+            <div
+              className="flex items-center gap-2 mb-5 flex-wrap"
+              style={{ fontFamily: MONO, fontSize: 12 }}
+            >
+              {apiKey && !editingKey ? (
+                <>
+                  <span style={{ color: C.green }}>&#9679; API key set</span>
+                  <button
+                    onClick={() => { setKeyDraft(""); setEditingKey(true); }}
+                    style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontFamily: MONO, fontSize: 12, textDecoration: "underline", padding: 0 }}
+                  >
+                    change
+                  </button>
+                  <span style={{ color: C.faint }}>· model: {MODEL_CLOUD}</span>
+                </>
+              ) : (
+                <>
+                  <input
+                    type="password"
+                    value={keyDraft}
+                    onChange={(e) => setKeyDraft(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter" && keyDraft.trim()) saveKey(); }}
+                    placeholder="Anthropic API key (sk-ant-…)"
+                    aria-label="Anthropic API key"
+                    style={{
+                      flex: "1 1 260px",
+                      minWidth: 0,
+                      background: C.bg,
+                      border: `1px solid ${C.panelEdge}`,
+                      borderRadius: 4,
+                      color: C.text,
+                      fontFamily: MONO,
+                      fontSize: 12,
+                      padding: "7px 10px",
+                    }}
+                  />
+                  <button
+                    onClick={saveKey}
+                    disabled={!keyDraft.trim()}
+                    style={{
+                      background: keyDraft.trim() ? "rgba(242,169,59,0.08)" : "transparent",
+                      border: `1px solid ${keyDraft.trim() ? C.amber : C.panelEdge}`,
+                      borderRadius: 4,
+                      color: keyDraft.trim() ? C.amber : C.faint,
+                      fontFamily: MONO,
+                      fontSize: 12,
+                      padding: "7px 12px",
+                      cursor: keyDraft.trim() ? "pointer" : "default",
+                    }}
+                  >
+                    save
+                  </button>
+                  {apiKey && (
+                    <button
+                      onClick={() => { setEditingKey(false); setKeyDraft(""); }}
+                      style={{ background: "none", border: "none", color: C.muted, cursor: "pointer", fontFamily: MONO, fontSize: 12, textDecoration: "underline", padding: 0 }}
+                    >
+                      cancel
+                    </button>
+                  )}
+                  <span style={{ color: C.faint }}>stored in this browser only</span>
+                </>
+              )}
+            </div>
+          )}
+
+          {/* the fragment */}
+          <h1
+            style={{
+              fontFamily: DISPLAY,
+              fontWeight: 900,
+              lineHeight: 1.04,
+              letterSpacing: "-0.02em",
+              fontSize: "clamp(1.7rem, 4.6vw, 3.6rem)",
+              maxWidth: "20ch",
+            }}
+          >
+            {slide.fragment}
+          </h1>
+          <p
+            className="mt-4"
+            style={{
+              color: C.muted,
+              fontSize: "clamp(0.95rem, 1.6vw, 1.15rem)",
+              maxWidth: "58ch",
+              lineHeight: 1.5,
+            }}
+          >
+            {slide.sub}
+          </p>
+
+          {/* probes */}
+          <div className="flex flex-wrap gap-2 mt-8" role="group" aria-label="Probes">
+            {ACTIONS.map((a) => {
+              const isActive = a.id === activeActionId;
+              return (
+                <button
+                  key={a.id}
+                  className="probe-btn"
+                  onClick={() => selectAction(a)}
+                  disabled={loading != null}
+                  style={{
+                    fontFamily: MONO,
+                    fontSize: 13,
+                    padding: "9px 14px",
+                    borderRadius: 4,
+                    border: `1px solid ${isActive ? C.amber : C.panelEdge}`,
+                    background: isActive ? "rgba(242,169,59,0.08)" : "transparent",
+                    color: isActive ? C.amber : C.muted,
+                    cursor: loading != null ? "wait" : "pointer",
+                    transition: "all 0.15s",
+                  }}
+                >
+                  {a.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* response panel */}
+          <div
+            className="mt-5 flex-1 min-h-0 flex flex-col"
+            style={{
+              background: C.panel,
+              border: `1px solid ${C.panelEdge}`,
+              borderRadius: 6,
+              minHeight: 220,
+            }}
+          >
+            {activeAction == null && (
+              <div className="flex-1 flex items-center justify-center p-8 text-center">
+                <p style={{ color: C.faint, fontFamily: MONO, fontSize: 13, maxWidth: "44ch", lineHeight: 1.7 }}>
+                  Pick a probe. The model fleshes out the rung on demand — first
+                  answers come from the prepared cache, “generate another” asks live.
+                </p>
+              </div>
+            )}
+
+            {activeAction != null && (
+              <>
+                {/* panel header */}
+                <div
+                  className="flex items-center gap-3 px-4 py-2 flex-wrap"
+                  style={{ borderBottom: `1px solid ${C.panelEdge}`, fontFamily: MONO, fontSize: 11, letterSpacing: "0.12em" }}
+                >
+                  {entry && (
+                    <span
+                      style={{
+                        color: entry.source === "live" ? C.green : C.amber,
+                        textTransform: "uppercase",
+                      }}
+                    >
+                      {entry.source === "live"
+                        ? `\u25CF live \u00B7 ${entry.via === "cloud" ? "claude" : "qwen"}`
+                        : "\u25A0 precomputed"}
+                    </span>
+                  )}
+                  {entries.length > 1 && (
+                    <span className="flex items-center gap-1" style={{ color: C.faint }}>
+                      <button className="nav-btn" onClick={() => browse(-1)} disabled={shownIdx === 0}
+                        style={{ background: "none", border: "none", color: shownIdx === 0 ? C.panelEdge : C.muted, cursor: "pointer", fontSize: 13, padding: "0 4px" }}
+                        aria-label="Earlier answer">‹</button>
+                      {shownIdx + 1} of {entries.length}
+                      <button className="nav-btn" onClick={() => browse(1)} disabled={shownIdx >= entries.length - 1}
+                        style={{ background: "none", border: "none", color: shownIdx >= entries.length - 1 ? C.panelEdge : C.muted, cursor: "pointer", fontSize: 13, padding: "0 4px" }}
+                        aria-label="Later answer">›</button>
+                    </span>
+                  )}
+                  <span className="ml-auto">
+                    <button
+                      className="nav-btn"
+                      onClick={() => generate(slide, activeAction)}
+                      disabled={loading != null}
+                      style={{
+                        background: "none",
+                        border: `1px solid ${C.panelEdge}`,
+                        borderRadius: 4,
+                        color: loading != null ? C.faint : C.green,
+                        fontFamily: MONO,
+                        fontSize: 11,
+                        letterSpacing: "0.12em",
+                        padding: "4px 10px",
+                        cursor: loading != null ? "wait" : "pointer",
+                      }}
+                    >
+                      {loading != null ? "\u2026" : "\u21BB generate another"}
+                    </button>
+                  </span>
+                </div>
+
+                {/* panel body */}
+                <div
+                  className="px-5 py-5 overflow-y-auto"
+                  onClick={isTypingThis ? skipTyping : undefined}
+                  style={{ cursor: isTypingThis ? "pointer" : "default" }}
+                  title={isTypingThis ? "Click to reveal all" : undefined}
+                >
+                  {loading != null ? (
+                    <p style={{ fontFamily: MONO, color: C.green, fontSize: 14, lineHeight: 1.8 }}>
+                      asking the model… {elapsed}s{" "}
+                      <span className="cursor-blink">▊</span>
+                    </p>
+                  ) : error ? (
+                    <div style={{ fontFamily: MONO, fontSize: 13, lineHeight: 1.7 }}>
+                      <p style={{ color: C.red }}>
+                        Generation failed — {error}. Check the connection, then try again.
+                      </p>
+                      <button
+                        className="nav-btn mt-3"
+                        onClick={() => generate(slide, activeAction)}
+                        style={{ background: "none", border: `1px solid ${C.red}`, borderRadius: 4, color: C.red, fontFamily: MONO, fontSize: 12, padding: "5px 12px", cursor: "pointer" }}
+                      >
+                        Try again
+                      </button>
+                    </div>
+                  ) : entry ? (
+                    <p
+                      style={{
+                        fontFamily: MONO,
+                        fontSize: "clamp(0.9rem, 1.5vw, 1.05rem)",
+                        lineHeight: 1.85,
+                        color: C.text,
+                        whiteSpace: "pre-wrap",
+                        maxWidth: "72ch",
+                      }}
+                    >
+                      {displayText}
+                      {isTypingThis && <span className="cursor-blink" style={{ color: C.green }}>▊</span>}
+                    </p>
+                  ) : null}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* footer: slide navigation */}
+          <div className="flex items-center justify-between mt-5 flex-wrap gap-3">
+            <span style={{ fontFamily: MONO, fontSize: 11, color: C.faint, letterSpacing: "0.1em" }}>
+              ← → keys move between rungs
+            </span>
+            <div className="flex gap-2">
+              <button
+                className="nav-btn"
+                onClick={() => goto(Math.max(0, slideIdx - 1))}
+                disabled={slideIdx === 0}
+                style={{ fontFamily: MONO, fontSize: 13, padding: "8px 16px", borderRadius: 4, border: `1px solid ${C.panelEdge}`, background: "transparent", color: slideIdx === 0 ? C.faint : C.text, cursor: slideIdx === 0 ? "default" : "pointer" }}
+              >
+                ← down
+              </button>
+              <button
+                className="nav-btn"
+                onClick={() => goto(Math.min(SLIDES.length - 1, slideIdx + 1))}
+                disabled={slideIdx === SLIDES.length - 1}
+                style={{ fontFamily: MONO, fontSize: 13, padding: "8px 16px", borderRadius: 4, border: `1px solid ${C.amber}`, background: "rgba(242,169,59,0.08)", color: slideIdx === SLIDES.length - 1 ? C.faint : C.amber, cursor: slideIdx === SLIDES.length - 1 ? "default" : "pointer" }}
+              >
+                climb →
+              </button>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+}
