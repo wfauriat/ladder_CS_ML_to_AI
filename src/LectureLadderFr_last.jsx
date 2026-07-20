@@ -24,7 +24,7 @@ const C = {
 const DISPLAY = "'Archivo', system-ui, sans-serif";
 const MONO = "'IBM Plex Mono', ui-monospace, monospace";
 
-const SHOW_PROMPT_ON_GENERATE = true;
+const SHOW_PROMPT_ON_GENERATE = true; // stale-ish (now UI button)
 
 /* SLIDES (the spine) and ACTIONS (the probes) are hand-authored in a
    separate content module so this component stays generic. */
@@ -40,7 +40,7 @@ const SHOW_PROMPT_ON_GENERATE = true;
 // qwen3 is a "thinking" model: its chain-of-thought can eat the whole token
 // budget and leave `content` empty. callLocal disables it with `think: false`
 // on the native API, so any qwen3 tag works; -nothink is just belt-and-braces.
-const MODEL_LOCAL = "qwen3";
+const MODEL_LOCAL = "qwen3:8b";
 const MODEL_CLOUD = "claude-sonnet-5";
 // const MODEL_MISTRAL = "mistral-small-latest";
 const MODEL_MISTRAL = "mistral-medium-2508";
@@ -51,20 +51,27 @@ const MODEL_MISTRAL = "mistral-medium-2508";
 // The UI stays generic: it renders Object.values(MODES) and reads these fields.
 const MODES = {
   local: {
-    id: "local", label: "local · qwen", short: "qwen",
+    id: "local", label: "local-qwen", short: "qwen",
     note: "Ollama · localhost:11434", model: MODEL_LOCAL,
   },
   cloud: {
-    id: "cloud", label: "cloud · claude", short: "claude",
+    id: "cloud", label: "claude", short: "claude",
     note: "Anthropic API · api.anthropic.com", model: MODEL_CLOUD,
     needsKey: true, keyStore: "ladder.apiKey", keyEnv: "VITE_ANTHROPIC_API_KEY",
     keyLabel: "Clé API Anthropic", keyHint: "Clé API Anthropic (sk-ant-…)",
   },
   mistral: {
-    id: "mistral", label: "cloud · mistral", short: "mistral",
+    id: "mistral", label: "mistral", short: "mistral",
     note: "Mistral API · api.mistral.ai", model: MODEL_MISTRAL,
     needsKey: true, keyStore: "ladder.mistralKey", keyEnv: "VITE_MISTRAL_API_KEY",
     keyLabel: "Clé API Mistral", keyHint: "Clé API Mistral",
+  },
+  // Private-network engine: same-origin Python proxy adds Kerberos/SPNEGO and
+  // relays to the local Mistral endpoint. No needsKey ⇒ the key-bar UI stays
+  // hidden; no endpoint URL or key ever reaches the browser.
+  proxy: {
+    id: "proxy", label: "local-mistral", short: "mistral",
+    note: "Endpoint local via proxy Kerberos", model: MODEL_MISTRAL,
   },
 };
 
@@ -181,8 +188,48 @@ async function callMistral(prompt, apiKey) {
   return text;
 }
 
+/* Private-network engine — same-origin proxy that adds Kerberos/SPNEGO and
+   relays to the local Mistral endpoint. The browser sends only the built
+   prompt to POST /api/generate (same origin ⇒ no CORS, no key, no endpoint
+   URL in the bundle) and receives { text }. All prompt logic stays in the
+   browser; the proxy is a thin relay. FastAPI error bodies ({ detail }) are
+   surfaced into the existing red error panel, mirroring the local diagnostics
+   (timeout / unreachable / 401 Kerberos / empty). */
+const PROXY_TIMEOUT_MS = 130000; // slightly above the server-side timeout
+
+async function callProxy(prompt) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
+  try {
+    const response = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      signal: controller.signal,
+      body: JSON.stringify({ prompt }),
+    });
+    if (!response.ok) {
+      let detail = "";
+      try { detail = (await response.json())?.detail || ""; } catch { /* non-JSON body */ }
+      throw new Error(`le proxy a répondu ${response.status}${detail ? ` — ${detail}` : ""}`);
+    }
+    const data = await response.json();
+    const text = (data?.text || "").trim();
+    if (!text) throw new Error("réponse vide du modèle");
+    return text;
+  } catch (err) {
+    if (err.name === "AbortError")
+      throw new Error(`le proxy a expiré après ${PROXY_TIMEOUT_MS / 1000}s — le modèle est peut-être en cours de chargement ou surchargé`, { cause: err });
+    if (err instanceof TypeError)
+      throw new Error("impossible de joindre le proxy sur cette origine — le serveur est-il démarré ?", { cause: err });
+    throw err; // our own diagnostic Errors pass through unchanged
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /* Dispatcher — pick the engine for this call. */
 function callModel(prompt, { mode, apiKey }) {
+  if (mode === "proxy") return callProxy(prompt);
   if (mode === "cloud") return callCloud(prompt, apiKey);
   if (mode === "mistral") return callMistral(prompt, apiKey);
   return callLocal(prompt);
@@ -252,6 +299,7 @@ export default function LectureLadderFr() {
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState(null);
   const [lastPrompt, setLastPrompt] = useState(null); // DEV: prompt string shown in the inspector overlay (null = hidden)
+  const [showPromptEnabled, setShowPromptEnabled] = useState(SHOW_PROMPT_ON_GENERATE); // runtime toggle for the prompt inspector
   const [typing, setTyping] = useState(null); // { key, full, shown }
   const typingTimer = useRef(null);
   const reduceMotion = useRef(
@@ -359,7 +407,7 @@ export default function LectureLadderFr() {
         const prev = history[s.id][a.id].map((e) => e.text);
         // const prev = Object.values(history[s.id]).flat().map((e) => e.text);
         const prompt = buildPrompt({ slide: s, probe: a, priorAnswers: prev, outputLanguage: "fr" });
-        if (SHOW_PROMPT_ON_GENERATE) setLastPrompt(prompt); // DEV: pop the inspector; the call fires anyway
+        if (showPromptEnabled) setLastPrompt(prompt);
         const text = await callModel(prompt, { mode, apiKey });
         setHistory((h) => {
           const next = { ...h, [s.id]: { ...h[s.id] } };
@@ -376,7 +424,7 @@ export default function LectureLadderFr() {
         setLoading(null);
       }
     },
-    [history, startTyping, mode, apiKey]
+    [history, startTyping, mode, apiKey, showPromptEnabled]
   );
 
   // First click on a probe just displays it; clicking the already-active probe
@@ -754,7 +802,7 @@ export default function LectureLadderFr() {
               {slide.eyebrow}
             </span>
             <span style={{ color: C.faint }}>
-              {slideIdx === 0 ? "Depuis de multiples états élémentaires jusqu'à des objets et actions complexes" : `${slideIdx} / ${SLIDES.length - 1}`}
+              {slideIdx === 0 ? "Depuis des états élémentaires jusqu'à des objets complexes" : `${slideIdx} / ${SLIDES.length - 1}`}
             </span>
             <div className="ml-auto flex items-center gap-1" role="group" aria-label="Moteur">
               {Object.values(MODES).map((m) => {
@@ -785,6 +833,34 @@ export default function LectureLadderFr() {
                   </button>
                 );
               })}
+<button
+                className="probe-btn"
+                onClick={() => {
+                  setShowPromptEnabled((v) => {
+                    const next = !v;
+                    if (!next) setLastPrompt(null); // closing the toggle also dismisses any open inspector
+                    return next;
+                  });
+                }}
+                title="Afficher le prompt envoyé au modèle"
+                aria-pressed={showPromptEnabled}
+                style={{
+                  fontFamily: MONO,
+                  fontSize: 11,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  padding: "5px 10px",
+                  borderRadius: 4,
+                  border: `1px solid ${showPromptEnabled ? C.amber : C.panelEdge}`,
+                  background: showPromptEnabled ? "rgba(242,169,59,0.08)" : "transparent",
+                  color: showPromptEnabled ? C.amber : C.faint,
+                  cursor: "pointer",
+                  transition: "all 0.15s",
+                  marginLeft: 8,
+                }}
+              >
+                prompt {showPromptEnabled ? "on" : "off"}
+              </button>
             </div>
           </div>
 

@@ -1,0 +1,26 @@
+# --- LADDER proxy runtime deps ---
+# Python 3.10+ recommended.
+#
+# SYSTEM PACKAGES REQUIRED FIRST (Debian/Ubuntu), for building httpx-gssapi
+# against the platform Kerberos libraries:
+#   apt-get install -y libkrb5-dev krb5-user gcc
+# (krb5-user provides kinit/klist for the smoke test; libkrb5-dev + gcc are the
+#  build deps for the gssapi wheel that httpx-gssapi pulls in.)
+
+fastapi>=0.111
+uvicorn[standard]>=0.30
+pydantic>=2.7
+
+# OpenAI-compatible client — used exactly as the validated snippet.
+openai>=1.30
+
+# TLS via the OS trust store (so the internal CA is trusted without a bundle).
+truststore>=0.9
+
+# SPNEGO/Kerberos auth flow for httpx. Pulls in `gssapi`, which needs the
+# system krb5 dev headers listed above at install time.
+httpx-gssapi>=0.4
+
+# anyio ships with FastAPI/Starlette, pinned here since app.py calls it directly
+# to run the synchronous OpenAI client off the event loop.
+anyio>=4.0
