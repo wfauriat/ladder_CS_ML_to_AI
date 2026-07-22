@@ -90,7 +90,7 @@ const REGISTER_BY_PROBE = {
   custom: {
     audience: "an engaged listener who may be lay or technical",
     rules: `RULES:
-- Answer the listener's question directly and honestly, grounded in the intended meaning above; if it strays beyond the slide, answer briefly and say so.
+- Carry out the listener's request directly and honestly, grounded in the intended meaning above; if it strays beyond the slide, do it briefly and say so.
 - Accessible first, but you may use precise terms with a quick gloss where they earn their place.
 - At most 130 words. Plain prose only: no headings, no bullet points, no markdown.`,
   },
@@ -120,11 +120,12 @@ function buildAvoidBlock(priorAnswers, charBudget) {
   return `\nDo NOT repeat the framing, analogies or examples of these earlier answers — reach for a genuinely fresh angle, and in particular do not reuse the same concrete example:\n${joined}`;
 }
 
-/* The custom-question probe: the user's own question, framed against the
-   slide. Kept here so all task-string construction lives in one module. */
-export const CUSTOM_ACTION = { id: "custom", label: "your question" };
-export const buildCustomTask = (question) =>
-  `Answer the listener's own question about this slide. Question: "${question}"`;
+/* The custom-task probe: the box now holds a TASK authored by the user (or a
+   thread question prefaced into one), spliced verbatim as the prompt's TASK.
+   Kept here so all task-string construction lives in one module. */
+export const CUSTOM_ACTION = { id: "custom", label: "your task" };
+export const buildCustomTask = (task) => task;
+
 
 /* ------------------------------------------------------------
    buildPrompt — the single entry point.

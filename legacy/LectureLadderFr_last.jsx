@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { buildPrompt, CUSTOM_ACTION, buildCustomTask } from "./promptBuilder.js";
-import { SLIDES, ACTIONS, CATEGORIES } from "./ladderContentFr_last.js";
+import { SLIDES, ACTIONS, CATEGORIES } from "./ladderContentFr_last_pop.js";
 
 /* ============================================================
    THE LADDER (FR) — a lecture instrument.

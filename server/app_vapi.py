@@ -63,20 +63,6 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-# try:
-#     # SPNEGO/Kerberos auth flow for httpx. Requires system GSSAPI/krb5 libraries
-#     # at build time — see requirements.txt.
-#     from httpx_gssapi import HTTPSPNEGOAuth
-# except ImportError:  # surfaced as a clear error at startup, not a silent import
-#     HTTPSPNEGOAuth = None
-
-# try:
-#     from openai import OpenAI
-#     from openai._types import Omit
-# except ImportError:
-#     OpenAI = None
-#     Omit = None
-
 
 # # ---------------------------------------------------------------------------
 # # Configuration — everything endpoint/identity-specific is read from the
@@ -89,120 +75,7 @@ class Settings:
     _DEFAULT_STATIC_DIR = str(Path(__file__).resolve().parent.parent / "dist")
     STATIC_DIR = os.environ.get("LADDER_STATIC_DIR", _DEFAULT_STATIC_DIR)
 
-
-# # ---------------------------------------------------------------------------
-# # Request / response contracts. The browser sends only the already-built prompt
-# # string; the proxy wraps it in the OpenAI messages shape so all prompt logic
-# # stays in the front-end's promptBuilder.
-# # ---------------------------------------------------------------------------
-# class GenerateIn(BaseModel):
-#     prompt: str = Field(min_length=1)
-
-
-# class GenerateOut(BaseModel):
-#     text: str
-
-
-# def _build_client() -> "OpenAI":
-#     """Construct the OpenAI client exactly as the validated snippet does:
-#     truststore TLS + SPNEGO/Kerberos auth + dummy key with Authorization stripped.
-#     """
-#     if OpenAI is None or Omit is None:
-#         raise RuntimeError(
-#             "openai is not installed — `pip install openai` (see requirements.txt)."
-#         )
-#     if HTTPSPNEGOAuth is None:
-#         raise RuntimeError(
-#             "httpx-gssapi is not installed — `pip install httpx-gssapi` and make "
-#             "sure the system krb5/GSSAPI libraries are present (see requirements.txt)."
-#         )
-
-#     http_client = httpx.Client(
-#         # OS trust store — trusts the internal CA without shipping a bundle.
-#         verify=truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT),
-#         # SPNEGO/Kerberos from the ambient ccache/keytab. Bare call = same
-#         # defaults the working snippet relies on (SPN derived from host).
-#         auth=HTTPSPNEGOAuth(),
-#         timeout=httpx.Timeout(Settings.TIMEOUT_S),
-#     )
-#     return OpenAI(
-#         base_url=Settings.BASE_URL,
-#         api_key="EMPTY",  # SDK requires a value; endpoint ignores it
-#         http_client=http_client,
-#         # Strip the SDK's bearer so it cannot collide with the Negotiate header.
-#         default_headers={"Authorization": Omit()},
-#     )
-
-
-# _client: "OpenAI | None" = None
-
-
-# @asynccontextmanager
-# async def lifespan(_: FastAPI):
-#     global _client
-#     _client = _build_client()
-#     try:
-#         yield
-#     finally:
-#         # httpx.Client is sync; close it via the SDK's underlying client.
-#         try:
-#             _client._client.close()  # type: ignore[attr-defined]
-#         except Exception:
-#             pass
-
-
 app = FastAPI(title="LADDER proxy")
-
-
-# @app.get("/api/health")
-# async def health():
-#     return {"ok": True, "model": Settings.MODEL, "base_url": Settings.BASE_URL}
-
-
-# @app.post("/api/generate", response_model=GenerateOut)
-# async def generate(body: GenerateIn):
-#     # The OpenAI SDK call is synchronous (httpx.Client); run it off the event
-#     # loop so the server stays responsive under concurrent requests.
-#     import anyio
-
-#     def _call() -> str:
-#         resp = _client.chat.completions.create(
-#             model=Settings.MODEL,
-#             max_tokens=Settings.MAX_TOKENS,
-#             stream=False,
-#             messages=[{"role": "user", "content": body.prompt}],
-#         )
-#         return (resp.choices[0].message.content or "").strip()
-
-#     try:
-#         text = await anyio.to_thread.run_sync(_call)
-#     except Exception as e:  # map SDK/transport errors to the old diagnostics
-#         text = None
-#         msg = str(e)
-#         # openai raises typed errors; match on class name to avoid a hard import
-#         # dependency on the exception hierarchy across SDK versions.
-#         name = type(e).__name__
-#         if name in ("APITimeoutError",) or isinstance(e, httpx.TimeoutException):
-#             raise HTTPException(
-#                 504,
-#                 f"model endpoint timed out after {Settings.TIMEOUT_S:.0f}s — "
-#                 "it may be loading or overloaded",
-#             )
-#         if name in ("APIConnectionError",) or isinstance(e, httpx.TransportError):
-#             # SPNEGO failures usually surface here or as a 401 below.
-#             raise HTTPException(502, f"cannot reach model endpoint — {msg}")
-#         if name in ("AuthenticationError", "PermissionDeniedError") or " 401" in msg:
-#             raise HTTPException(
-#                 502,
-#                 "Kerberos auth rejected (401) — check the service ticket/keytab, "
-#                 "the SPN, and clock skew against the KDC",
-#             )
-#         raise HTTPException(502, f"model endpoint error — {msg}")
-
-#     if not text:
-#         raise HTTPException(502, "empty completion from model endpoint")
-#     return GenerateOut(text=text)
-
 
 # ---------------------------------------------------------------------------
 # Static SPA serving (optional). Registered LAST so it never shadows /api. Real
