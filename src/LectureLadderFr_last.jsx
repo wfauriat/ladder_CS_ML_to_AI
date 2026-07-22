@@ -24,7 +24,7 @@ const C = {
 const DISPLAY = "'Archivo', system-ui, sans-serif";
 const MONO = "'IBM Plex Mono', ui-monospace, monospace";
 
-const SHOW_PROMPT_ON_GENERATE = true; // stale-ish (now UI button)
+const SHOW_PROMPT_ON_GENERATE = false; // stale-ish (now UI button)
 
 /* SLIDES (the spine) and ACTIONS (the probes) are hand-authored in a
    separate content module so this component stays generic. */
@@ -275,7 +275,8 @@ const RAIL_PILL_WIDTH = 26; // px — fixed so tags stay aligned across pill and
 // The custom box is a TASK box: its text is sent verbatim as the prompt's TASK.
 // A thread chip, by contrast, is a QUESTION, so loading one prefaces it into a
 // task ("answer this question") before it lands in the box.
-const THREAD_QUESTION_PREFIX = `Answer the following question: "`;
+const THREAD_QUESTION_PREFIX = `Answer the following question with more details. 
+You can target a more technical audiance: "`;
 
 export default function LectureLadderFr() {
   const [slideIdx, setSlideIdx] = useState(0);
