@@ -276,7 +276,7 @@ const RAIL_PILL_WIDTH = 26; // px — fixed so tags stay aligned across pill and
 // A thread chip, by contrast, is a QUESTION, so loading one prefaces it into a
 // task ("answer this question") before it lands in the box.
 const THREAD_QUESTION_PREFIX = `Answer the following question with more details. 
-You can target a more technical audiance: "`;
+You can target a more technical audience: "`;
 
 export default function LectureLadderFr() {
   const [slideIdx, setSlideIdx] = useState(0);

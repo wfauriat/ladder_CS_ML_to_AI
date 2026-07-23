@@ -1,6 +1,6 @@
 # THE LADDER — App Synthesis (working reference)
 
-*A compact map of the app, written so it can be pasted into a future session instead of re-reading the whole codebase. Today's focus: sharpening content and de-literalizing the French translation.*
+*A compact map of the app, written so it can be pasted into a future session instead of re-reading the whole codebase. Last refreshed 2026-07-23, after the seed typo sweep and the addition of the `orienter` rung.*
 
 ---
 
@@ -12,15 +12,19 @@ The deck is a vertical **ladder** of slides ("rungs"), each a compressed thesis 
 
 ---
 
-## 2. File layout — the clean split
+## 2. File layout — the current split
 
-| File | Role | Touch it for authoring/translation? |
+| File | Role | Touch it for authoring? |
 |---|---|---|
-| `LectureLadder.jsx` | The **engine**. Generic, content-agnostic. Renders whatever the content module provides. Holds all register/tone rules (in `buildPrompt`), model adapters, UI, keyboard, state. | **Rarely.** Only if changing prompt register, tone rules, or UI. |
-| `ladderContent.js` | The **English content**. Exports `SLIDES` and `ACTIONS`. | **Yes — primary EN file.** |
-| `ladderContentFr.js` | The **French content**. Same shape, translated. A parallel `LectureLadderFr.jsx` is assumed to import it. | **Yes — primary FR file.** |
+| `src/ladderContentFr_last.js` | The **content — source of truth** (FR, v3). Exports `SLIDES`, `ACTIONS`, `CATEGORIES`. | **Yes — primary authoring file.** |
+| `src/LectureLadderFr_last.jsx` | The **engine** (FR edition; the one `main.jsx` mounts). Generic UI/state/keyboard, model adapters, category rail, prompt inspector. | Rarely — UI/engine changes only. |
+| `src/promptBuilder.js` | **Prompt construction**, extracted from the engine: `buildPrompt`, per-probe register table, `DECK_ABSTRACT`, output-language directive. Pure functions, framework-agnostic. | For register/tone/abstract changes. |
+| `src/ladderContent.js` | EN content, **v2 — stale** (19 slides, old English ids, pre-`agents`/`apprendre`/`orienter` arc). No engine imports it anymore (`LectureLadder.jsx` was removed); kept as reference. | Only if reviving the EN deck. |
+| `src/main.jsx` | Mounts `LectureLadderFr`; the EN import is commented out. | No. |
+| `src/App.jsx` / `App.css` | Untouched Vite starter, unused. | No. |
+| `dev/ABSTRACT.md` | Author-facing prose behind the condensed `DECK_ABSTRACT`. **Keep the two in sync.** | When the arc changes. |
 
-The engine never has to change when content changes. **Order is data:** reorder/add/drop slides by editing the array.
+The engine never changes when content changes. **Order is data:** reorder/add/drop slides by editing the array.
 
 ---
 
@@ -30,108 +34,118 @@ The engine never has to change when content changes. **Order is data:** reorder/
 
 | Field | Role | Seen by |
 |---|---|---|
-| `id` | Stable key (cache keys + internal). **Must match across EN and FR files.** Never change casually. | internal |
-| `tag` | Short left-rail label (e.g. `switches` / `interrupteurs`) | room |
+| `id` | Stable key (cache keys + internal). **French words now** (`sujet`, `interrupteurs`, …). Never change casually. | internal |
+| `category` | Key into `CATEGORIES`; consecutive slides sharing one form a coloured pill on the rail. | room (as pill) |
+| `tag` | Short left-rail label | room |
 | `eyebrow` | Kicker, `"Section · concept"` | room |
 | `fragment` | The headline, big type | room |
 | `sub` | One-line subtext under the fragment | room |
-| `anchor` | **Ground truth: intended meaning + limits + "differentiate from neighbours" notes.** Constrains every live generation. Written as an instruction to the model. | **model only** |
+| `anchor` | **Ground truth in English: intended meaning + deck-theme ties + "differentiate from neighbours" notes.** Written as an instruction to the model; constrains every live generation. | **model only** |
 | `seeds` | Precomputed cached answers, per probe | room (on click) |
 
+**`CATEGORIES`**: `cs` (blue #6FA8DC), `ml` (mauve #B39DDB), `ai` (pink #E28AAE), `stack` (amber triangle pill, unlabeled — the opening frame), `hinge` (split cs/ml colours, unlabeled — `motifs`).
+
 **`seeds[probeId]`** is EITHER one string OR an array of strings.
-- Array → browsable alternatives, shown as `‹ 1 of 4 ›` before any live call.
-- Omit a probe entirely → its first click goes straight to the live model.
-- Convention in current content: slides seed `threads`, `synthesis`, `more`, `example`; they leave `differently`, `risk`, `bite` to generate live. The **root** slide's `more` is an array of 3 (a template); every other slide has a single-string `more`.
+- Array → browsable alternatives, shown as `‹ n sur m ›` before any live call.
+- Omit a probe → its first click goes straight to the live model.
+- **Current seeding state:** every slide seeds all 7 probes with 1–4 variants each, EXCEPT `sujet` (no `threads` seed).
+- Seeds are plain text rendered raw: **no markdown** (`*…*` would display literally).
 
 ### A PROBE (object in `ACTIONS[]`)
 
-`{ id, label (button text), task (instruction spliced into the prompt) }`.
+`{ id, label (FR button text), task (English instruction spliced into the prompt) }`. Current probes, in order:
 
-Current probes, in order:
+| id | FR label | Register enforced (in promptBuilder) |
+|---|---|---|
+| `more` | En savoir plus | lay, ≤110 words, halfway between fragment and anchor |
+| `example` | Un exemple | one concrete everyday scene |
+| `synthesis` | Résumé technique | **technical**, ≤130 words |
+| `differently` | Autre perspective | fresh analogy each time |
+| `risk` | Difficultés ? | limitations/risks w.r.t. CS/data-science |
+| `bite` | Une surprise ? | one concrete real-world failure/cost |
+| `threads` | Dérouler un fil | **special — see below** |
 
-| id | EN label | FR label | Notes |
-|---|---|---|---|
-| `more` | Tell me more | En dire plus | lay register, ≤110 words |
-| `example` | Give an example | Donner un exemple | one concrete everyday scene |
-| `synthesis` | Technical synthesis | Synthèse technique | **technical register**, ≤130 words |
-| `differently` | Explain it differently | Expliquer autrement | fresh analogy each time |
-| `risk` | What limitations/risks? | Limites / risques ? | |
-| `bite` | An example that bites? | Un exemple qui mord ? | one concrete failure/cost |
-| `threads` | Threads to pull | Fils à tirer | **special — see below** |
+**`threads` is cross-fed:** `buildPrompt` injects the slide's **first** `synthesis` seed variant as context, then asks for 3–5 deeper pointers, one per line, no bullets. Rendered as **clickable chips**; clicking one loads it into the task box wrapped as a question (`THREAD_QUESTION_PREFIX` in the engine: *"Answer the following question with more details. You can target a more technical audience: '…'"*).
 
-**`threads` is cross-fed:** `buildPrompt` injects the slide's `synthesis` seed as extra context, then asks for 3–5 deeper pointers. Rendered as clickable chips that load into the custom-question box. One thread per line, no bullets.
+**The custom box is a TASK box**, not a question box: its text is sent verbatim as the prompt's TASK (`buildCustomTask` is a passthrough).
 
 ---
 
 ## 4. Slide order (the climb, base → top)
 
-18 slides in five arcs. IDs are stable and shared between EN and FR.
+**23 slides.** The left rail reads bottom-to-top: `SLIDES[0]` (`sujet`) is the base.
 
-1. `root` — the climb (opening frame)
-2. **The machine:** `switches` · `steps` · `os` · `memory`
-3. **Instructing:** `code` · `algorithms`
-4. **Assembling:** `stacks` · `gluing` · `defensive`
-5. **Recurring (base plate):** `recurring`
-6. **Learning from data:** `learningparadigm` · `space` · `correlation` · `generalization` · `uncertainty`
-7. **The AI paradigm:** `nextword` · `scale` · `trainonce` · `probably`
+1. `sujet` — the opening frame (▲ stack) — operations not magic; the twin climb (reach up / certainty down) held model-only
+2. **cs:** `interrupteurs` · `opérations` · `memoire` · `arbitre` · `code` · `algorithmes` · `abstractions` · `assemblages` · `perturbations`
+3. **hinge:** `motifs` — one layer below · map ≠ territory · everything is a tradeoff (epistemic ladder latent in anchor)
+4. **ml:** `apprendre` · `representation` · `correlation` · `generalisation` · `incertitude`
+5. **ai:** `motsuivant` · `taille` · `orienter` · `couts` · `contexte` · `probables` · `agents`
 
-The left rail reads **bottom-to-top**: `SLIDES[0]` (`root`) is the base of the climb.
+The AI arc's internal logic: *principle* (`motsuivant`) + *infrastructure/scale* (`taille`) = pre-training; then *orientation* (`orienter` — fine-tuning + context engineering turn the raw predictor into an assistant; the deck's "rules" reattach here); then *economics* (`couts`); then *memory at usage time* (`contexte` — stateless model, knowledge tiered across frozen weights / the window / external stores: the `memoire` hierarchy recurring with freshness & verifiability at stake); then *the non-deterministic top layer* (`probables`), *action* (`agents`).
+
+**EN/FR id parity is dead** — the FR ids are the only cache keys that matter while the EN deck is stale.
 
 ---
 
-## 5. Prompt construction (`buildPrompt`, in the engine)
+## 5. Prompt construction (`src/promptBuilder.js`)
 
-Every prompt injects: `fragment`, `sub`, `anchor` (as declared ground truth), the probe's `task`, and an **"avoid repeating earlier answers"** block (feeds prior texts, truncated ~2400 chars).
+`buildPrompt({ slide, probe, priorAnswers, outputLanguage = "fr", deckTitle, options })` assembles, in order:
 
-**Per-probe register switching** (this is where tone is enforced, NOT in the content file):
+1. Role line (lecture-deck engine, audience from the register table).
+2. **`DECK_ABSTRACT`** — condensed whole-deck synopsis, prepended to every prompt (`INCLUDE_ABSTRACT = true` toggle; v1 kept commented for A/B). Now includes the `orienter` clause ("an orientation phase … rules return…") and the `contexte` clause ("use is stateless: knowledge splits across frozen weights, the window, external stores…").
+3. FRAGMENT + SUBTEXT.
+4. INTENDED MEANING = the `anchor`, declared ground truth.
+5. For `threads` only: the first `synthesis` seed as "TECHNICAL SYNTHESIS".
+6. TASK = the probe's `task` (or the custom box's text verbatim).
+7. Anti-repetition block: prior answers for this slide+probe, truncated to 2400 chars.
+8. Register RULES (see probe table above; `custom` = adaptive, ≤130 words).
+9. **Output-language directive appended last** — fr: idiomatic spoken French, "not a translation," projected and read aloud.
 
-- **Default** (`more`, `example`, `differently`, `risk`, `bite`): audience = "intelligent lay audience," ≤110 words, concrete/vivid, plain-words gloss on any technical term, plain prose, add to the fragment (don't restate).
-- **`synthesis`**: audience = "scientifically literate," precise/technical, correct domain terms, NO plain-word translation, ≤130 words.
-- **`threads`**: technical audience; fed the `synthesis` seed; asks for 3–5 concrete threads, one per line, ≤~100 words total.
-- **`custom`** (user's own question): adaptive lay/technical, ≤130 words.
-
-**Implication for editing/translation:** seeds must match the register their probe enforces. `synthesis`/`threads` seeds are technical; `more`/`example` seeds are plain, vivid, "breathing" (~100 words, projected and read aloud).
+**Implication for authoring:** seeds must match the register their probe enforces; `synthesis`/`threads` technical, the rest plain, vivid, ~100 words, breathing for read-aloud.
 
 ---
 
 ## 6. Model adapters (engine)
 
-Single choke-point: `callModel(prompt, { mode, apiKey })`. Two engines, toggled in the UI:
+Single choke-point: `callModel(prompt, { mode, apiKey })`. **Four engines**, toggled in the header (choice persisted at `localStorage["ladder.mode"]`); per-provider keys never mix (each mode declares `keyEnv` + `keyStore`):
 
-- **local** — Qwen 3 8B via Ollama, native `/api/chat` endpoint, `think:false` (kills chain-of-thought that otherwise ate the token budget and returned empty). Timeout + num_predict cap + random seed per call so regenerations diverge.
-- **cloud** — Claude via the Anthropic API, called directly from the browser (needs API key + `anthropic-dangerous-direct-browser-access`). Key stored in `localStorage` only.
-
-Everything else is engine-agnostic. To run against another local model, swap `callLocal`.
+- **local** — `qwen3:8b` via Ollama native `/api/chat`, `think:false` (kills chain-of-thought that ate the token budget). 120 s timeout, `num_predict` 512, temp 0.8, random seed per call.
+- **cloud** — `claude-sonnet-5` via Anthropic API, direct from browser (`anthropic-dangerous-direct-browser-access`). Key: `VITE_ANTHROPIC_API_KEY` env or `ladder.apiKey`.
+- **mistral** — `mistral-medium-2508` via `api.mistral.ai` (OpenAI-shaped response). Key: `VITE_MISTRAL_API_KEY` env or `ladder.mistralKey`. Depends on Mistral's CORS.
+- **proxy** ("local-mistral") — same-origin `POST /api/generate {prompt} → {text}`; a Python/FastAPI proxy adds Kerberos/SPNEGO and relays to a private Mistral endpoint. No key or endpoint URL in the browser; 130 s timeout; FastAPI `{detail}` errors surfaced in the red panel.
 
 ---
 
 ## 7. UI / interaction (engine)
 
-- **Left rail:** rungs, bottom-to-top, current one highlighted amber.
-- **Main column:** eyebrow + engine toggle → fragment (big) → sub → probe buttons → custom-question input → response panel.
-- **Response panel:** shows source badge — amber ■ *precomputed* vs green ● *live · (claude|qwen)*; version browser `‹ n of m ›`; typewriter reveal on live text (skippable by click; disabled under `prefers-reduced-motion`); `threads` render as clickable chips.
-- **Keyboard:** `↑↓` rungs · `←→` probes · `C` cycle versions · `G` generate.
-- **Palette:** phosphor-on-dark; amber = stored/precomputed, green = live generation.
+- **Left rail:** rungs bottom-to-top, current one amber; **category pills** span each run (vertical label; ▲ triangle for `stack`; split-colour unlabeled pill for the hinge; clicking a pill jumps to the run's first slide). Rail is sticky and scrolls internally.
+- **Header:** eyebrow + slide counter → engine toggle (4 modes) → **`prompt on/off`** toggle: when on, each generation opens a non-blocking overlay showing the exact prompt sent (copy/close).
+- **Key bar** appears only for modes with `needsKey`.
+- **Main column:** fragment (big) → sub → probe buttons → task box (*"Formulez votre propre tâche…"* + Exécuter ↵) → response panel.
+- **Response panel:** source badge — amber ■ *pré-calculé* vs green ● *en direct · (claude|qwen|mistral)*; version browser `‹ n sur m ›`; `↻ générer` / `↻ en générer une autre`; typewriter reveal on live text (click to skip; off under `prefers-reduced-motion`); `threads` render as chips.
+- **Keyboard:** `↑↓` rungs · `←→` probes · `C` cycle versions · `G` generate. Second click on the active probe also cycles versions. Footer: `↓ descendre` / `monter ↑`.
+- **Palette:** phosphor-on-dark; amber = stored, green = live.
 
 ---
 
-## 8. State of the two content layers (for today's work)
+## 8. Content state & open items (as of 2026-07-23)
 
-- **`ladderContent.js` (EN):** complete, the source of truth. Fields to sharpen: `fragment`, `sub`, `anchor`, and the `seeds` prose.
-- **`ladderContentFr.js` (FR):** complete and careful, but **often tracks English word order and idiom too closely** — the "too literal" problem. Typical tells to loosen in iteration: anglicisms and calqued idioms (e.g. *"se pointe vers des milliers de jobs," "le marché était simple," "tu peux tirer cent mille pages," "boring-until-catastrophic"* rendered literally), English sentence rhythm carried into French, and register slips where the plain-vs-technical line should differ from English.
-
-### How we'll iterate (agreed loop)
-1. Go **slide by slide**, in a tight amend/clean/refine loop.
-2. For each field: sharpen the EN meaning first if needed, then produce **idiomatic** FR — natural for a French lecturer reading aloud, faithful to the `anchor`, matching the register the probe enforces.
-3. Keep `id`s identical across EN and FR; keep seed lengths "breathing" (~100 words); preserve the `more`-as-array shape only where it already exists (root).
+- **FR content file is the only live layer.** A ~30-fix typo/grammar sweep of all read-aloud seeds was completed 2026-07-23 (incl. the two English typos in the `more` task and the thread-prefix "audience").
+- **`orienter` added** after `taille` (fragment/sub hand-authored, anchor by Claude); **seeds populated** via templated Opus interactions (bite: the April 2025 ChatGPT sycophancy rollback). `sujet` still lacks a `threads` seed.
+- **`contexte` added** between `couts` and `probables` (authored end-to-end by Claude, kept after the author's review, 2026-07-23; tag "contexte"). Thesis: statelessness + three memory tiers (frozen weights / context window as only working memory / external stores via approximate retrieval) = the `memoire` hierarchy recurring with freshness & verifiability at stake. Bite: Bing insisting Avatar 2 wasn't out (Feb 2023).
+- **EN deck stale:** `ladderContent.js` is v2 (19 slides, old ids); the EN engine file was removed. Decide eventually: re-derive EN from FR v3, or drop.
+- **Remaining candidates from the 2026-07-23 review** (decision: distribute as seeds/threads, no more rungs): reasoning / automated decomposition → one `agents` seed (learned decomposition without contracts — its constructive on-ramp) + a `couts` thread on test-time compute (buying reliability with sequential tokens); tool calls as the top layer calling back down the deterministic stack (fold into the same `agents` seed); promote the "vérification asymétrique" thread (`probables`) to a room-facing seed — the deck's most actionable takeaway; an anthropomorphism/Eliza-effect seed (fluency ≠ competence).
+- **Style backlog (deliberate, low priority):** "bogue" vs "bug" inconsistency; French spacing before `;`/`:`; tense mix "gagnerons/payons" in `sujet` more[1].
 
 ---
 
 ## 9. Quick-reference invariants (don't break these)
 
-- `id` values are stable and **identical across EN/FR** (cache keys depend on them).
-- `anchor` is model-only and written as an instruction — it is not shown to the room.
-- Register lives in the **engine**, not the content; seeds must conform to it.
-- `threads` = one pointer per line, no bullets; it is fed the `synthesis` seed.
-- `more` on `root` is an **array**; elsewhere it's a single string.
-- Prose fields use backticks (accents, dashes, apostrophes need no escaping).
+- FR slide `id`s are **stable cache keys** — never rename casually.
+- `anchor` is model-only, English, written as an instruction — never shown to the room.
+- Register lives in **promptBuilder.js**, not the content; seeds must conform to their probe's register.
+- `threads` = one pointer per line, no bullets/numbering; it is cross-fed the **first** `synthesis` seed variant.
+- Seeds: string or array (array → browsable); omitted probe → first click generates live; **no markdown inside seeds** (rendered raw).
+- `category` must reference a key of `CATEGORIES`; only *consecutive* slides sharing a category merge into one pill.
+- Prose fields use backticks (accents, dashes, apostrophes need no escaping; straight double quotes are fine).
+- **When the arc changes** (add/move/drop a rung): update `DECK_ABSTRACT` in `promptBuilder.js` **and** `dev/ABSTRACT.md`, then refresh this file.
