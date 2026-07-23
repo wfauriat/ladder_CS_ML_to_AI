@@ -1,0 +1,10 @@
+# Minimal runtime deps for server/app_vapi.py (what run_server.sh starts).
+# The full corporate/Kerberos deployment set for app.py lives in requirements.txt.
+
+fastapi>=0.111
+uvicorn[standard]>=0.30
+pydantic>=2.7
+
+# Imported at module top level by app_vapi.py, so required even while the
+# upstream httpx.Client wiring is commented out.
+httpx>=0.27
