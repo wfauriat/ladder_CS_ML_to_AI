@@ -19,6 +19,7 @@ const C = {
   amber: "#F2A93B",      // phosphor amber — stored / precomputed
   green: "#9FD8A0",      // phosphor green — live generation
   red: "#E08A6D",
+  blue: "#40acac",
 };
 
 const DISPLAY = "'Archivo', system-ui, sans-serif";
@@ -307,6 +308,9 @@ export default function LectureLadderFr() {
   const [lastPrompt, setLastPrompt] = useState(null); // DEV: prompt string shown in the inspector overlay (null = hidden)
   const [showPromptEnabled, setShowPromptEnabled] = useState(SHOW_PROMPT_ON_GENERATE); // runtime toggle for the prompt inspector
   const [typing, setTyping] = useState(null); // { key, full, shown }
+  // < md only: which hamburger menu is unfolded — 'mode' | 'probes' | null.
+  // Desktop never sets it (the hamburger buttons are hidden at md and up).
+  const [openMenu, setOpenMenu] = useState(null);
   const typingTimer = useRef(null);
   const reduceMotion = useRef(
     typeof window !== "undefined" &&
@@ -371,6 +375,9 @@ export default function LectureLadderFr() {
       ? viewIdx[vKey]
       : 0; // default to the first authored alternative; live gens set viewIdx explicitly
   const entry = entries[shownIdx] || null;
+
+  /* changing slide folds any open hamburger menu back up */
+  useEffect(() => { setOpenMenu(null); }, [slideIdx]);
 
   /* elapsed-seconds counter while generating (patience UI) */
   useEffect(() => {
@@ -671,6 +678,17 @@ export default function LectureLadderFr() {
       )}
 
 
+      {/* < md — invisible backdrop: tapping outside an open hamburger menu
+          closes it (it sits below the menus at z-40, above everything else) */}
+      {openMenu != null && (
+        <div
+          className="fixed inset-0 md:hidden"
+          style={{ zIndex: 30 }}
+          onClick={() => setOpenMenu(null)}
+          aria-hidden="true"
+        />
+      )}
+
       <div className="flex flex-1 min-h-0">
         {/* ladder — vertical tag navigation (base at the bottom, climb up) */}
         <nav
@@ -754,6 +772,7 @@ export default function LectureLadderFr() {
                           whiteSpace: "nowrap",
                           fontFamily: MONO,
                           fontSize: 10,
+                          fontWeight: 500,
                           letterSpacing: "0.18em",
                           textTransform: "uppercase",
                           color: cat.color,
@@ -776,7 +795,7 @@ export default function LectureLadderFr() {
                       title={s.fragment}
                       style={{
                         fontFamily: MONO,
-                        fontSize: 11,
+                        fontSize: 12,
                         letterSpacing: "0.08em",
                         textAlign: "left",
                         whiteSpace: "nowrap",
@@ -803,43 +822,117 @@ export default function LectureLadderFr() {
           {/* eyebrow + engine toggle */}
           <div
             className="flex items-center gap-4 mb-3 flex-wrap"
-            style={{ fontFamily: MONO, fontSize: 13, letterSpacing: "0.18em" }}
+            style={{ fontFamily: MONO, fontSize: 13.5, letterSpacing: "0.18em", fontWeight: 500}}
           >
             <span style={{ color: C.amber, textTransform: "uppercase" }}>
               {slide.eyebrow}
             </span>
-            <span style={{ color: C.faint }}>
+            <span style={{ color: C.blue, fontSize: 13, fontWeight: 500 }}>
               {slideIdx === 0 ? "Depuis des états élémentaires jusqu'à des objets complexes" : `${slideIdx} / ${SLIDES.length - 1}`}
             </span>
             <div className="ml-auto flex items-center gap-1" role="group" aria-label="Moteur">
-              {Object.values(MODES).map((m) => {
-                const on = mode === m.id;
-                return (
-                  <button
-                    key={m.id}
-                    className="probe-btn"
-                    onClick={() => setMode(m.id)}
-                    disabled={loading != null}
-                    title={m.note}
-                    aria-pressed={on}
+              {/* ≥ md — the usual row of engine buttons */}
+              <div className="hidden md:flex items-center gap-1">
+                {Object.values(MODES).map((m) => {
+                  const on = mode === m.id;
+                  return (
+                    <button
+                      key={m.id}
+                      className="probe-btn"
+                      onClick={() => setMode(m.id)}
+                      disabled={loading != null}
+                      title={m.note}
+                      aria-pressed={on}
+                      style={{
+                        fontFamily: MONO,
+                        fontSize: 12,
+                        letterSpacing: "0.08em",
+                        textTransform: "uppercase",
+                        padding: "5px 10px",
+                        borderRadius: 4,
+                        border: `1px solid ${on ? C.amber : C.panelEdge}`,
+                        background: on ? "rgba(242,169,59,0.08)" : "transparent",
+                        color: on ? C.amber : C.faint,
+                        cursor: loading != null ? "wait" : "pointer",
+                        transition: "all 0.15s",
+                      }}
+                    >
+                      {m.label}
+                    </button>
+                  );
+                })}
+              </div>
+              {/* < md — the engines folded into a hamburger menu */}
+              <div className="relative md:hidden">
+                <button
+                  className="probe-btn"
+                  onClick={() => setOpenMenu((v) => (v === "mode" ? null : "mode"))}
+                  disabled={loading != null}
+                  aria-haspopup="menu"
+                  aria-expanded={openMenu === "mode"}
+                  style={{
+                    fontFamily: MONO,
+                    fontSize: 11,
+                    letterSpacing: "0.08em",
+                    textTransform: "uppercase",
+                    padding: "5px 10px",
+                    borderRadius: 4,
+                    border: `1px solid ${openMenu === "mode" ? C.amber : C.panelEdge}`,
+                    background: openMenu === "mode" ? "rgba(242,169,59,0.08)" : "transparent",
+                    color: C.amber,
+                    cursor: loading != null ? "wait" : "pointer",
+                    transition: "all 0.15s",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  ☰ {activeMode.label}
+                </button>
+                {openMenu === "mode" && (
+                  <div
+                    role="menu"
+                    aria-label="Choisir le moteur"
+                    className="absolute right-0 mt-1"
                     style={{
-                      fontFamily: MONO,
-                      fontSize: 11,
-                      letterSpacing: "0.08em",
-                      textTransform: "uppercase",
-                      padding: "5px 10px",
-                      borderRadius: 4,
-                      border: `1px solid ${on ? C.amber : C.panelEdge}`,
-                      background: on ? "rgba(242,169,59,0.08)" : "transparent",
-                      color: on ? C.amber : C.faint,
-                      cursor: loading != null ? "wait" : "pointer",
-                      transition: "all 0.15s",
+                      background: C.panel,
+                      border: `1px solid ${C.panelEdge}`,
+                      borderRadius: 6,
+                      padding: 4,
+                      minWidth: 180,
+                      zIndex: 40,
                     }}
                   >
-                    {m.label}
-                  </button>
-                );
-              })}
+                    {Object.values(MODES).map((m) => {
+                      const on = mode === m.id;
+                      return (
+                        <button
+                          key={m.id}
+                          className="probe-btn"
+                          role="menuitemradio"
+                          aria-checked={on}
+                          onClick={() => { setMode(m.id); setOpenMenu(null); }}
+                          style={{
+                            display: "block",
+                            width: "100%",
+                            textAlign: "left",
+                            fontFamily: MONO,
+                            fontSize: 12,
+                            letterSpacing: "0.08em",
+                            textTransform: "uppercase",
+                            padding: "9px 12px",
+                            borderRadius: 4,
+                            border: "none",
+                            background: on ? "rgba(242,169,59,0.08)" : "none",
+                            color: on ? C.amber : C.muted,
+                            cursor: "pointer",
+                          }}
+                        >
+                          {on ? "● " : "○ "}{m.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
 <button
                 className="probe-btn"
                 onClick={() => {
@@ -964,8 +1057,8 @@ export default function LectureLadderFr() {
             {slide.sub}
           </p>
 
-          {/* probes */}
-          <div className="flex flex-wrap gap-2 mt-5" role="group" aria-label="Sondes">
+          {/* probes — ≥ md: the usual wrapped row of buttons */}
+          <div className="hidden md:flex flex-wrap gap-2 mt-5" role="group" aria-label="Sondes">
             {ACTIONS.map((a) => {
               const isActive = a.id === activeActionId;
               return (
@@ -995,6 +1088,78 @@ export default function LectureLadderFr() {
                 </button>
               );
             })}
+          </div>
+          {/* probes — < md: folded into a hamburger menu */}
+          <div className="relative md:hidden mt-5">
+            <button
+              className="probe-btn"
+              onClick={() => setOpenMenu((v) => (v === "probes" ? null : "probes"))}
+              disabled={loading != null}
+              aria-haspopup="menu"
+              aria-expanded={openMenu === "probes"}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 10,
+                width: "100%",
+                fontFamily: MONO,
+                fontSize: 13,
+                padding: "9px 14px",
+                borderRadius: 4,
+                border: `1px solid ${openMenu === "probes" || activeActionId ? C.amber : C.panelEdge}`,
+                background: openMenu === "probes" ? "rgba(242,169,59,0.08)" : "transparent",
+                color: activeActionId ? C.amber : C.muted,
+                cursor: loading != null ? "wait" : "pointer",
+                transition: "all 0.15s",
+              }}
+            >
+              <span aria-hidden="true">☰</span>
+              {activeAction && activeActionId !== "custom"
+                ? activeAction.label
+                : "Choisir une question…"}
+            </button>
+            {openMenu === "probes" && (
+              <div
+                role="menu"
+                aria-label="Sondes"
+                className="absolute left-0 right-0 mt-1"
+                style={{
+                  background: C.panel,
+                  border: `1px solid ${C.panelEdge}`,
+                  borderRadius: 6,
+                  padding: 4,
+                  zIndex: 40,
+                }}
+              >
+                {ACTIONS.map((a) => {
+                  const isActive = a.id === activeActionId;
+                  return (
+                    <button
+                      key={a.id}
+                      className="probe-btn"
+                      role="menuitemradio"
+                      aria-checked={isActive}
+                      onClick={() => { selectAction(a); setOpenMenu(null); }}
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        textAlign: "left",
+                        fontFamily: MONO,
+                        fontSize: 13,
+                        padding: "10px 12px",
+                        borderRadius: 4,
+                        border: "none",
+                        background: isActive ? "rgba(242,169,59,0.08)" : "none",
+                        color: isActive ? C.amber : C.muted,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {a.label}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
           </div>
 
           {/* custom task box — type your own task, or click a thread above (loaded as a question) */}
@@ -1052,18 +1217,47 @@ export default function LectureLadderFr() {
             }}
           >
             {activeAction == null && (
-              <div className="flex-1 flex flex-col items-center justify-center p-8 gap-4 text-center">
-                <p style={{ color: C.faint, fontFamily: MONO, fontSize: 14, maxWidth: "56ch", lineHeight: 1.7 }}>
-                  Choisissez une question à poser au modèle (LLM).
-                  Le modèle répond en fonction du barreau/slide courant et du type de question (sonde), à la demande.
-                </p>
-                <p style={{ color: C.faint, fontFamily: MONO, fontSize: 14, maxWidth: "56ch", lineHeight: 1.7 }}>
-                  Des réponses sont pré-calculées pour chaque sonde, « en générer une autre »
-                  interroge le modèle (LLM) en direct.
-                </p>
-                <p style={{ color: C.faint, fontFamily: MONO, fontSize: 14, maxWidth: "56ch", lineHeight: 1.7 }}>
-                  Vous pouvez choisir le fournisseur de modèle (en haut à droite).
-                </p>
+              <div className="flex-1 flex flex-col items-center justify-center p-8 gap-3 text-center">
+                {slide.id === "sujet" ? (
+                  <>
+                    <p style={{ color: C.amber, fontFamily: MONO, fontSize: 16, maxWidth: "66ch", lineHeight: 1.7 }}>
+                      Ce cours interactif a deux objectifs principaux :
+                    </p>
+                    <p style={{ color: C.amber, fontFamily: MONO, fontSize: 16, maxWidth: "66ch", lineHeight: 1.7 }}>
+                      1. discuter <strong>ce que l'IA moderne permet ou ne permet pas</strong>
+                    </p>
+                    <p style={{ color: C.amber, fontFamily: MONO, fontSize: 16, maxWidth: "66ch", lineHeight: 1.7 }}>
+                      2. parcourir les notions d'<strong>informatique</strong>,
+                      de <strong>statistiques pour l'apprentissage machine</strong> et de
+                      construction de <strong>modèles de langage</strong>, qui sont nécessaires pour se
+                      faire un avis sur la question.
+                    </p>
+                    <p style={{ color: C.blue, fontFamily: MONO, fontSize: 14, maxWidth: "66ch", lineHeight: 1.7 }}>
+                      Le cours est composé d'un ensemble de slides à
+                      parcourir <strong>du bas vers le haut</strong> selon la barre de navigation à
+                      gauche.
+                    </p>
+                    <p style={{ color: C.blue, fontFamily: MONO, fontSize: 14, maxWidth: "66ch", lineHeight: 1.7 }}>
+                      Pour chaque slide, des questions <strong>préformatées (prompt/contexte)</strong> peuvent être
+                      posées au modèle de langage : une version déjà générée
+                      est souvent disponible, d'autres versions peuvent être demandées.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p style={{ color: C.faint, fontFamily: MONO, fontSize: 14, maxWidth: "66ch", lineHeight: 1.7 }}>
+                      Choisissez une question à poser au modèle (LLM).
+                      Le modèle répond en fonction du barreau/slide courant et du type de question (sonde), à la demande.
+                    </p>
+                    <p style={{ color: C.faint, fontFamily: MONO, fontSize: 14, maxWidth: "66ch", lineHeight: 1.7 }}>
+                      Des réponses sont pré-calculées pour chaque sonde, « en générer une autre »
+                      interroge le modèle (LLM) en direct.
+                    </p>
+                    <p style={{ color: C.faint, fontFamily: MONO, fontSize: 14, maxWidth: "66ch", lineHeight: 1.7 }}>
+                      Vous pouvez choisir le fournisseur de modèle (en haut à droite).
+                    </p>
+                  </>
+                )}
               </div>
             )}
 
@@ -1125,18 +1319,18 @@ export default function LectureLadderFr() {
 
                 {/* panel body */}
                 <div
-                  className="px-5 py-5 overflow-y-auto"
+                  className="px-5 py-5 overflow-y-auto flex flex-col flex-1 min-h-0"
                   onClick={isTypingThis ? skipTyping : undefined}
                   style={{ cursor: isTypingThis ? "pointer" : "default" }}
                   title={isTypingThis ? "Cliquer pour tout révéler" : undefined}
                 >
                   {loading != null ? (
-                    <p style={{ fontFamily: MONO, color: C.green, fontSize: 14, lineHeight: 1.8 }}>
+                    <p style={{ fontFamily: MONO, color: C.green, fontSize: 14, lineHeight: 1.8, margin: "auto" }}>
                       interrogation du modèle… {elapsed}s{" "}
                       <span className="cursor-blink">▊</span>
                     </p>
                   ) : error ? (
-                    <div style={{ fontFamily: MONO, fontSize: 13, lineHeight: 1.7 }}>
+                    <div style={{ fontFamily: MONO, fontSize: 13, lineHeight: 1.7, margin: "auto", maxWidth: "72ch" }}>
                       <p style={{ color: C.red }}>
                         Échec de la génération — {error}. Vérifiez la connexion, puis réessayez.
                       </p>
@@ -1149,7 +1343,7 @@ export default function LectureLadderFr() {
                       </button>
                     </div>
                   ) : entry && activeAction.id === "threads" ? (
-                    <div className="flex flex-col gap-2" style={{ maxWidth: "72ch" }}>
+                    <div className="flex flex-col gap-2" style={{ maxWidth: "72ch", margin: "auto" }}>
                       <span style={{ fontFamily: MONO, fontSize: 11, color: C.faint, letterSpacing: "0.08em" }}>
                         choisissez un fil à tirer pour le charger comme question dans la boîte de tâche ci-dessous ↓
                       </span>
@@ -1185,18 +1379,21 @@ export default function LectureLadderFr() {
                     <p
                       style={{
                         fontFamily: MONO,
-                        fontSize: "clamp(0.9rem, 1.5vw, 1.05rem)",
-                        lineHeight: 1.85,
+                        fontSize: "clamp(1rem, 0.85rem + 0.4vw, 1.2rem)",
+                        textAlign: "center",
+                        lineHeight: 1.8,
                         color: C.text,
                         whiteSpace: "pre-wrap",
                         maxWidth: "72ch",
+                        margin: "auto",
+                        hyphens: "auto",
                       }}
                     >
                       {displayText}
                       {isTypingThis && <span className="cursor-blink" style={{ color: C.green }}>▊</span>}
                     </p>
                   ) : (
-                    <p style={{ fontFamily: MONO, color: C.faint, fontSize: 14, lineHeight: 1.8, maxWidth: "64ch" }}>
+                    <p style={{ fontFamily: MONO, color: C.faint, fontSize: 14, lineHeight: 1.8, maxWidth: "64ch", margin: "auto" }}>
                       Aucune version pré-calculée pour cette sonde. Cliquez sur{" "}
                       <span style={{ color: C.green }}>↻ générer</span> ci-dessus pour
                       interroger {mode === "local" ? "le modèle local" : "le modèle distant"}.
@@ -1209,7 +1406,7 @@ export default function LectureLadderFr() {
 
           {/* footer: slide navigation */}
           <div className="flex items-center justify-between mt-5 flex-wrap gap-3">
-            <span style={{ fontFamily: MONO, fontSize: 12, color: C.faint, letterSpacing: "0.1em" }}>
+            <span style={{ fontFamily: MONO, fontSize: 12, color: C.blue, letterSpacing: "0.1em" }}>
               ↑↓ barreaux · ←→ sondes · C défiler · G générer
             </span>
             <div className="flex gap-2">
@@ -1225,7 +1422,7 @@ export default function LectureLadderFr() {
                 className="nav-btn"
                 onClick={() => goto(Math.min(SLIDES.length - 1, slideIdx + 1))}
                 disabled={slideIdx === SLIDES.length - 1}
-                style={{ fontFamily: MONO, fontSize: 13, padding: "8px 16px", borderRadius: 4, border: `1px solid ${C.amber}`, background: "rgba(242,169,59,0.08)", color: slideIdx === SLIDES.length - 1 ? C.faint : C.amber, cursor: slideIdx === SLIDES.length - 1 ? "default" : "pointer" }}
+                style={{ fontFamily: MONO, fontSize: 13, padding: "8px 16px", borderRadius: 4, border: `1px solid ${C.blue}`, background: "rgba(242,169,59,0.08)", color: slideIdx === SLIDES.length - 1 ? C.faint : C.blue, cursor: slideIdx === SLIDES.length - 1 ? "default" : "pointer" }}
               >
                 monter ↑
               </button>
