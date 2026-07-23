@@ -753,7 +753,7 @@ export default function LectureLadderFr() {
                           transform: "rotate(180deg)",
                           whiteSpace: "nowrap",
                           fontFamily: MONO,
-                          fontSize: 9.5,
+                          fontSize: 10,
                           letterSpacing: "0.18em",
                           textTransform: "uppercase",
                           color: cat.color,
@@ -1052,11 +1052,17 @@ export default function LectureLadderFr() {
             }}
           >
             {activeAction == null && (
-              <div className="flex-1 flex items-center justify-center p-8 text-center">
-                <p style={{ color: C.faint, fontFamily: MONO, fontSize: 13, maxWidth: "48ch", lineHeight: 1.7 }}>
-                  Choisissez une sonde. Le modèle étoffe le barreau à la demande — les
-                  premières réponses viennent du cache préparé, « en générer une autre »
-                  interroge en direct.
+              <div className="flex-1 flex flex-col items-center justify-center p-8 gap-4 text-center">
+                <p style={{ color: C.faint, fontFamily: MONO, fontSize: 14, maxWidth: "56ch", lineHeight: 1.7 }}>
+                  Choisissez une question à poser au modèle (LLM).
+                  Le modèle répond en fonction du barreau/slide courant et du type de question (sonde), à la demande.
+                </p>
+                <p style={{ color: C.faint, fontFamily: MONO, fontSize: 14, maxWidth: "56ch", lineHeight: 1.7 }}>
+                  Des réponses sont pré-calculées pour chaque sonde, « en générer une autre »
+                  interroge le modèle (LLM) en direct.
+                </p>
+                <p style={{ color: C.faint, fontFamily: MONO, fontSize: 14, maxWidth: "56ch", lineHeight: 1.7 }}>
+                  Vous pouvez choisir le fournisseur de modèle (en haut à droite).
                 </p>
               </div>
             )}
@@ -1203,7 +1209,7 @@ export default function LectureLadderFr() {
 
           {/* footer: slide navigation */}
           <div className="flex items-center justify-between mt-5 flex-wrap gap-3">
-            <span style={{ fontFamily: MONO, fontSize: 11, color: C.faint, letterSpacing: "0.1em" }}>
+            <span style={{ fontFamily: MONO, fontSize: 12, color: C.faint, letterSpacing: "0.1em" }}>
               ↑↓ barreaux · ←→ sondes · C défiler · G générer
             </span>
             <div className="flex gap-2">
