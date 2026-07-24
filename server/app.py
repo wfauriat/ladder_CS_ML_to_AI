@@ -47,6 +47,23 @@ credentials are ambient in the environment — so:
           needed and tickets auto-renew.
 Per-user delegation (S4U2Proxy) is deliberately NOT implemented — it is a much
 larger piece of work, only needed if the endpoint does per-user authz/audit.
+
+RUNTIME CONFIGURATION (both halves)
+-----------------------------------
+Nothing tunable is baked into a build artifact — on either side:
+  • server: this file's `Settings` class reads LADDER_* environment variables
+    (endpoint, model, max tokens, temperature, timeout, static dir);
+  • browser: `settings.js` fetches `settings.json` from the served root at
+    startup (deck-arc injection, seed pre-fill, default engine, and per-engine
+    model + parameters for the three browser-side engines).
+Same principle, different transport: change a value, restart (server) or
+reload (browser) — never rebuild. The `proxy` engine holds no model name or
+token budget on the browser side ON PURPOSE: those are LADDER_MODEL and
+LADDER_MAX_TOKENS here, so the private endpoint's shape never reaches the JS
+bundle. Only the client's abort deadline lives in settings.json, and it should
+stay slightly above LADDER_TIMEOUT_S so the server's own error wins the race.
+`settings.json` is served with Cache-Control: no-store (see the route below)
+so an operator's edit takes effect on the next reload.
 """
 
 from __future__ import annotations
@@ -93,6 +110,13 @@ class Settings:
 
     MAX_TOKENS = int(os.environ.get("LADDER_MAX_TOKENS", "1000"))
     TIMEOUT_S = float(os.environ.get("LADDER_TIMEOUT_S", "120"))
+
+    # Sampling spread. The deck regenerates the same rung repeatedly and wants
+    # the answers to diverge, so this mirrors the browser engines' default
+    # rather than the SDK's. Empty string ⇒ omit the field entirely and let the
+    # endpoint apply its own default.
+    _temp = os.environ.get("LADDER_TEMPERATURE", "0.8").strip()
+    TEMPERATURE = float(_temp) if _temp else None
 
     # Where the built SPA lives (Vite `dist`). Served at "/". Leave empty to run
     # the proxy API-only (e.g. behind nginx that serves the static files).
@@ -166,7 +190,14 @@ app = FastAPI(title="LADDER proxy", lifespan=lifespan)
 
 @app.get("/api/health")
 async def health():
-    return {"ok": True, "model": Settings.MODEL, "base_url": Settings.BASE_URL}
+    return {
+        "ok": True,
+        "model": Settings.MODEL,
+        "base_url": Settings.BASE_URL,
+        "max_tokens": Settings.MAX_TOKENS,
+        "temperature": getattr(Settings, "TEMPERATURE", None),
+        "timeout_s": Settings.TIMEOUT_S,
+    }
 
 
 @app.post("/api/generate", response_model=GenerateOut)
@@ -176,11 +207,19 @@ async def generate(body: GenerateIn):
     import anyio
 
     def _call() -> str:
+        # getattr, not Settings.TEMPERATURE: the attribute is optional, and a
+        # config without it must degrade to "endpoint default" rather than
+        # raising AttributeError inside the request and surfacing as a 502.
+        kwargs = {}
+        temperature = getattr(Settings, "TEMPERATURE", None)
+        if temperature is not None:
+            kwargs["temperature"] = temperature
         resp = _client.chat.completions.create(
             model=Settings.MODEL,
             max_tokens=Settings.MAX_TOKENS,
             stream=False,
             messages=[{"role": "user", "content": body.prompt}],
+            **kwargs,
         )
         return (resp.choices[0].message.content or "").strip()
 
@@ -224,6 +263,24 @@ if Settings.STATIC_DIR:
     _assets = _static / "assets"
     if _assets.is_dir():
         app.mount("/assets", StaticFiles(directory=_assets), name="assets")
+
+    # The front-end's runtime knobs (deck arc on/off, seed pre-fill, default
+    # engine, per-engine model + parameters). It is the browser-side twin of
+    # this class: edit dist/settings.json and reload — no rebuild, no restart.
+    # Served with no-store so an edit is picked up on the next reload rather
+    # than sitting in a browser or intermediary cache; the hashed /assets
+    # bundle keeps its normal caching.
+    @app.get("/settings.json")
+    async def settings_json():
+        path = _static / "settings.json"
+        if not path.is_file():
+            # Not an error: settings.js falls back to its built-in defaults.
+            raise HTTPException(404, "no settings.json — front-end uses its defaults")
+        return FileResponse(
+            path,
+            media_type="application/json",
+            headers={"Cache-Control": "no-store, must-revalidate"},
+        )
 
     @app.get("/{full_path:path}")
     async def spa(full_path: str):

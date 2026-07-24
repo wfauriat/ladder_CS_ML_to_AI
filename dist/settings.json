@@ -1,0 +1,35 @@
+{
+  "_comment": "Runtime settings for THE LADDER. Edit this file in the served folder (next to index.html) and reload the page — no rebuild needed. Delete any key to fall back to its built-in default.",
+
+  "includeAbstract": true,
+  "loadSeeds": true,
+
+  "_comment_showPrompt": "true opens an overlay with the exact prompt sent, on every generation. The header's 'prompt on/off' button still overrides this for the session.",
+  "showPrompt": false,
+
+  "_comment_engine": "defaultEngine must be one of: local | cloud | mistral | proxy. A previously used engine stored in localStorage wins over this; clear it from the header toggle or with localStorage.removeItem('ladder.mode').",
+  "defaultEngine": "local",
+
+  "_comment_engines": "Per-engine model name and generation parameters. maxTokens caps the answer (rungs are ~110-130 words, so ~512 is ample; raise it if answers get cut off). temperature adds spread so regenerations diverge. timeoutMs bounds a stuck or cold-loading request. The proxy engine's model/maxTokens/timeout are server-side — see app.py and its LADDER_* env vars.",
+  "engines": {
+    "local": {
+      "model": "qwen3:8b",
+      "maxTokens": 512,
+      "temperature": 0.8,
+      "timeoutMs": 120000
+    },
+    "cloud": {
+      "model": "claude-sonnet-5",
+      "maxTokens": 1000,
+      "temperature": 1.0
+    },
+    "mistral": {
+      "model": "mistral-medium-2508",
+      "maxTokens": 1000,
+      "temperature": 0.8
+    },
+    "proxy": {
+      "timeoutMs": 130000
+    }
+  }
+}

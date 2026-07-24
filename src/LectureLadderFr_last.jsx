@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { buildPrompt, CUSTOM_ACTION, buildCustomTask } from "./promptBuilder.js";
 import { SLIDES, ACTIONS, CATEGORIES } from "./ladderContentFr_last.js";
+import { getSettings, engineSettings } from "./settings.js";
 
 /* ============================================================
    THE LADDER (FR) — a lecture instrument.
@@ -25,7 +26,9 @@ const C = {
 const DISPLAY = "'Archivo', system-ui, sans-serif";
 const MONO = "'IBM Plex Mono', ui-monospace, monospace";
 
-const SHOW_PROMPT_ON_GENERATE = false; // stale-ish (now UI button)
+// The prompt inspector's INITIAL state now comes from settings.json
+// (`showPrompt`, default false); the header's "prompt on/off" button still
+// owns it for the rest of the session.
 
 /* SLIDES (the spine) and ACTIONS (the probes) are hand-authored in a
    separate content module so this component stays generic. */
@@ -38,32 +41,34 @@ const SHOW_PROMPT_ON_GENERATE = false; // stale-ish (now UI button)
    Everything else is engine-agnostic: it calls
    callModel(prompt, { mode, apiKey }) and gets text back.
    ------------------------------------------------------------ */
+// Model names and generation parameters now come from settings.json at
+// runtime (see settings.js) — `engineSettings(id)` returns
+// { model, maxTokens, temperature, timeoutMs } with the shipped defaults as
+// fallback, so a deployed build can be retuned without a rebuild.
+//
 // qwen3 is a "thinking" model: its chain-of-thought can eat the whole token
 // budget and leave `content` empty. callLocal disables it with `think: false`
 // on the native API, so any qwen3 tag works; -nothink is just belt-and-braces.
-const MODEL_LOCAL = "qwen3:8b";
-const MODEL_CLOUD = "claude-sonnet-5";
-// const MODEL_MISTRAL = "mistral-small-latest";
-const MODEL_MISTRAL = "mistral-medium-2508";
-
 
 // Each engine declares its display strings and, for the cloud providers, how
 // its API key is sourced (env var + localStorage slot) so keys never collide.
 // The UI stays generic: it renders Object.values(MODES) and reads these fields.
+// `model` is a getter so the header note tracks settings.json (the table is
+// built at module load, before the settings fetch resolves).
 const MODES = {
   local: {
     id: "local", label: "local-qwen", short: "qwen",
-    note: "Ollama · localhost:11434", model: MODEL_LOCAL,
+    note: "Ollama · localhost:11434", get model() { return engineSettings("local").model; },
   },
   cloud: {
     id: "cloud", label: "claude", short: "claude",
-    note: "Anthropic API · api.anthropic.com", model: MODEL_CLOUD,
+    note: "Anthropic API · api.anthropic.com", get model() { return engineSettings("cloud").model; },
     needsKey: true, keyStore: "ladder.apiKey", keyEnv: "VITE_ANTHROPIC_API_KEY",
     keyLabel: "Clé API Anthropic", keyHint: "Clé API Anthropic (sk-ant-…)",
   },
   mistral: {
     id: "mistral", label: "mistral", short: "mistral",
-    note: "Mistral API · api.mistral.ai", model: MODEL_MISTRAL,
+    note: "Mistral API · api.mistral.ai", get model() { return engineSettings("mistral").model; },
     needsKey: true, keyStore: "ladder.mistralKey", keyEnv: "VITE_MISTRAL_API_KEY",
     keyLabel: "Clé API Mistral", keyHint: "Clé API Mistral",
   },
@@ -72,33 +77,32 @@ const MODES = {
   // hidden; no endpoint URL or key ever reaches the browser.
   proxy: {
     id: "proxy", label: "local-mistral", short: "mistral",
-    note: "Endpoint local via proxy Kerberos", model: MODEL_MISTRAL,
+    note: "Endpoint local via proxy Kerberos", model: "—", // server-side (LADDER_MODEL in app.py)
   },
 };
 
 /* Local engine — Qwen via Ollama, using the NATIVE /api/chat endpoint.
    See LectureLadder.jsx for the full rationale. think:false disables the
    chain-of-thought at the engine; an AbortController bounds the wait; a
-   random seed + mild temperature make regenerations diverge. */
-const LOCAL_TIMEOUT_MS = 120000; // abort a stuck / cold-loading request
-const LOCAL_NUM_PREDICT = 512;   // ample for a ~110-word answer; caps runaway
-const LOCAL_TEMPERATURE = 0.8;   // a little spread so regenerations diverge
-
+   random seed + mild temperature make regenerations diverge.
+   Timeout, token budget and temperature come from settings.json
+   (engines.local: timeoutMs / maxTokens / temperature). */
 async function callLocal(prompt) {
+  const cfg = engineSettings("local");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), LOCAL_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
   try {
     const response = await fetch("http://localhost:11434/api/chat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       signal: controller.signal,
       body: JSON.stringify({
-        model: MODEL_LOCAL,
+        model: cfg.model,
         stream: false,
         think: false, // disable qwen3 chain-of-thought — the root of empty replies
         options: {
-          num_predict: LOCAL_NUM_PREDICT,
-          temperature: LOCAL_TEMPERATURE,
+          num_predict: cfg.maxTokens,
+          temperature: cfg.temperature,
           seed: Math.floor(Math.random() * 1e9),
         },
         messages: [{ role: "user", content: prompt }],
@@ -118,14 +122,14 @@ async function callLocal(prompt) {
     if (!text) {
       if (data?.done_reason === "length")
         throw new Error(
-          `model used its ${LOCAL_NUM_PREDICT}-token budget before answering — raise num_predict or confirm think:false is honored`
+          `model used its ${cfg.maxTokens}-token budget before answering — raise engines.local.maxTokens in settings.json or confirm think:false is honored`
         );
       throw new Error("local model returned an empty answer");
     }
     return text;
   } catch (err) {
     if (err.name === "AbortError")
-      throw new Error(`local model timed out after ${LOCAL_TIMEOUT_MS / 1000}s — it may be loading or overloaded`, { cause: err });
+      throw new Error(`local model timed out after ${cfg.timeoutMs / 1000}s — it may be loading or overloaded`, { cause: err });
     if (err instanceof TypeError)
       throw new Error("cannot reach Ollama at localhost:11434 — is `ollama serve` running with OLLAMA_ORIGINS set for this origin?", { cause: err });
     throw err; // our own diagnostic Errors pass through unchanged
@@ -137,6 +141,7 @@ async function callLocal(prompt) {
 /* Cloud engine — Claude via the Anthropic API (direct browser access). */
 async function callCloud(prompt, apiKey) {
   if (!apiKey) throw new Error("no API key set — add one in the key bar");
+  const cfg = engineSettings("cloud");
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -146,8 +151,9 @@ async function callCloud(prompt, apiKey) {
       "anthropic-dangerous-direct-browser-access": "true",
     },
     body: JSON.stringify({
-      model: MODEL_CLOUD,
-      max_tokens: 1000,
+      model: cfg.model,
+      max_tokens: cfg.maxTokens,
+      temperature: cfg.temperature,
       messages: [{ role: "user", content: prompt }],
     }),
   });
@@ -169,6 +175,7 @@ async function callCloud(prompt, apiKey) {
    Mistral's CORS policy allowing the request from this origin. */
 async function callMistral(prompt, apiKey) {
   if (!apiKey) throw new Error("no API key set — add one in the key bar");
+  const cfg = engineSettings("mistral");
   const response = await fetch("https://api.mistral.ai/v1/chat/completions", {
     method: "POST",
     headers: {
@@ -176,8 +183,9 @@ async function callMistral(prompt, apiKey) {
       Authorization: `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: MODEL_MISTRAL,
-      max_tokens: 1000,
+      model: cfg.model,
+      max_tokens: cfg.maxTokens,
+      temperature: cfg.temperature,
       stream: false,
       messages: [{ role: "user", content: prompt }],
     }),
@@ -196,11 +204,14 @@ async function callMistral(prompt, apiKey) {
    browser; the proxy is a thin relay. FastAPI error bodies ({ detail }) are
    surfaced into the existing red error panel, mirroring the local diagnostics
    (timeout / unreachable / 401 Kerberos / empty). */
-const PROXY_TIMEOUT_MS = 130000; // slightly above the server-side timeout
-
+/* Only the abort deadline is a browser concern here (settings.json
+   engines.proxy.timeoutMs — keep it slightly above the server's
+   LADDER_TIMEOUT_S). The model name and token budget are server-side, in
+   app.py, so the private endpoint's shape never reaches the bundle. */
 async function callProxy(prompt) {
+  const cfg = engineSettings("proxy");
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), PROXY_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), cfg.timeoutMs);
   try {
     const response = await fetch("/api/generate", {
       method: "POST",
@@ -219,7 +230,7 @@ async function callProxy(prompt) {
     return text;
   } catch (err) {
     if (err.name === "AbortError")
-      throw new Error(`le proxy a expiré après ${PROXY_TIMEOUT_MS / 1000}s — le modèle est peut-être en cours de chargement ou surchargé`, { cause: err });
+      throw new Error(`le proxy a expiré après ${cfg.timeoutMs / 1000}s — le modèle est peut-être en cours de chargement ou surchargé`, { cause: err });
     if (err instanceof TypeError)
       throw new Error("impossible de joindre le proxy sur cette origine — le serveur est-il démarré ?", { cause: err });
     throw err; // our own diagnostic Errors pass through unchanged
@@ -282,13 +293,19 @@ You can target a more technical audience: "`;
 export default function LectureLadderFr() {
   const [slideIdx, setSlideIdx] = useState(0);
   // history[slideId][actionId] = [{ text, source: 'precomputed' | 'live' }]
+  // Read once: settings are frozen after the pre-mount load, and both the
+  // history initializer and generate() need this.
+  const useSeeds = getSettings().loadSeeds;
+
   const [history, setHistory] = useState(() => {
+    // settings.loadSeeds === false → start every probe empty, so the first
+    // click on any probe goes straight to the live model.
     const h = {};
     for (const s of SLIDES) {
       h[s.id] = {};
       for (const a of ACTIONS) {
         // a seed may be one string or an array of alternatives
-        const seed = s.seeds && s.seeds[a.id];
+        const seed = useSeeds ? s.seeds && s.seeds[a.id] : null;
         const seedList = Array.isArray(seed) ? seed : seed != null ? [seed] : [];
         h[s.id][a.id] = seedList.map((text) => ({ text, source: "precomputed" }));
       }
@@ -306,7 +323,7 @@ export default function LectureLadderFr() {
   const [elapsed, setElapsed] = useState(0);
   const [error, setError] = useState(null);
   const [lastPrompt, setLastPrompt] = useState(null); // DEV: prompt string shown in the inspector overlay (null = hidden)
-  const [showPromptEnabled, setShowPromptEnabled] = useState(SHOW_PROMPT_ON_GENERATE); // runtime toggle for the prompt inspector
+  const [showPromptEnabled, setShowPromptEnabled] = useState(() => getSettings().showPrompt); // runtime toggle for the prompt inspector, seeded from settings.json
   const [typing, setTyping] = useState(null); // { key, full, shown }
   // < md only: which hamburger menu is unfolded — 'mode' | 'probes' | null.
   // Desktop never sets it (the hamburger buttons are hidden at md and up).
@@ -324,7 +341,8 @@ export default function LectureLadderFr() {
       const saved = localStorage.getItem("ladder.mode");
       if (saved && MODES[saved]) return saved;
     } catch {}
-    return "local";
+    // no prior choice → settings.json's defaultEngine (validated on load)
+    return getSettings().defaultEngine;
   });
   // per-provider API keys, each seeded from its own env var then localStorage
   // (see MODES). Keyed by mode id so the Anthropic and Mistral keys never mix.
@@ -417,7 +435,14 @@ export default function LectureLadderFr() {
       setError(null);
       setLoading(a.id);
       try {
-        const prev = history[s.id][a.id].map((e) => e.text);
+        // Anti-repetition sees only LIVE answers when seeds are switched off.
+        // With loadSeeds:false the history starts empty, but any seed shown in
+        // this session would otherwise come back as an "earlier answer" — the
+        // pre-fill would leak into the prompt through the back door. Off means
+        // off: filter to what this session actually generated.
+        const prev = history[s.id][a.id]
+          .filter((e) => useSeeds || e.source !== "precomputed")
+          .map((e) => e.text);
         // const prev = Object.values(history[s.id]).flat().map((e) => e.text);
         const prompt = buildPrompt({ slide: s, probe: a, priorAnswers: prev, outputLanguage: "fr" });
         if (showPromptEnabled) setLastPrompt(prompt);
@@ -437,7 +462,7 @@ export default function LectureLadderFr() {
         setLoading(null);
       }
     },
-    [history, startTyping, mode, apiKey, showPromptEnabled]
+    [history, startTyping, mode, apiKey, showPromptEnabled, useSeeds]
   );
 
   // First click on a probe just displays it; clicking the already-active probe
@@ -579,7 +604,8 @@ export default function LectureLadderFr() {
       `}</style>
 
       {/* DEV prompt inspector — non-blocking overlay showing the exact prompt
-          last sent to the model. Gated by SHOW_PROMPT_ON_GENERATE. */}
+          last sent to the model. Gated by showPromptEnabled (initial value:
+          settings.json `showPrompt`). */}
       {lastPrompt != null && (
         <div
           role="dialog"

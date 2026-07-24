@@ -17,8 +17,8 @@
      not just the current one) so the model won't recycle the same
      example, analogy or framing.
    • A short deck ABSTRACT can be prepended to every prompt as shared
-     framing. Toggled by INCLUDE_ABSTRACT below — comment/uncomment
-     to A/B it. No UI (by request).
+     framing. Toggled at runtime by `includeAbstract` in settings.json
+     (see settings.js) — no rebuild to A/B it. No UI (by request).
 
    The register rules are lifted verbatim from the previous inline
    buildPrompt so generation behaviour does not drift; only the
@@ -30,6 +30,8 @@
    The directive is appended at the very end of the prompt. Add a
    language here to support another deck; the stem stays English.
    ------------------------------------------------------------ */
+import { getSettings } from "./settings.js";
+
 const OUTPUT_LANGUAGE_DIRECTIVE = {
   fr: `OUTPUT LANGUAGE: write your entire answer in FRENCH. It will be projected on screen and read aloud by a French-speaking lecturer, so it must sound like natural, idiomatic spoken French — NOT A TRANSLATION, so write as if you generated french to convey the meaning in your english context. Keep all reasoning above in mind, but produce only French prose. Do not preface the answer with any note about the language.`,
   en: `OUTPUT LANGUAGE: write your entire answer in ENGLISH.`,
@@ -39,9 +41,12 @@ const OUTPUT_LANGUAGE_DIRECTIVE = {
    DECK ABSTRACT (toggleable)
    A condensed synopsis of the whole deck, prepended as shared
    framing so every rung is generated with the arc in view. Kept
-   deliberately short. Flip INCLUDE_ABSTRACT to test with/without.
+   deliberately short.
+
+   The on/off switch now lives in `settings.json` (`includeAbstract`,
+   default true) and is read at call time — no rebuild to A/B it.
+   A caller may still force it per call via options.includeAbstract.
    ------------------------------------------------------------ */
-const INCLUDE_ABSTRACT = true; // ← toggle here (comment logic below is driven by this)
 
 /* PREVIOUS ABSTRACT (v1) — kept for development / A-B testing. To revert,
    comment out the active DECK_ABSTRACT below and uncomment this one.
@@ -62,6 +67,13 @@ const DECK_ABSTRACT = `DECK ARC (context, not to be restated): The deck is a sin
    inline buildPrompt. `threads` also pulls in the slide's technical
    synthesis as context (assembled in buildPrompt, not here).
    ------------------------------------------------------------ */
+/* How the slide's `anchor` is introduced. The authored probes fence the answer
+   inside it (it IS the slide); `custom` reframes it as the starting point the
+   listener's own task may travel from. Default is verbatim the old wording so
+   generation behaviour for the seven authored probes does not drift. */
+const DEFAULT_ANCHOR_FRAMING =
+  "INTENDED MEANING: stay strictly inside this, it is the ground truth of the slide:";
+
 const DEFAULT_REGISTER = {
   audience: "an intelligent lay audience",
   rules: `RULES:
@@ -83,16 +95,27 @@ const REGISTER_BY_PROBE = {
   threads: {
     audience: "a scientifically literate reader (comfortable with technical vocabulary)",
     rules: `RULES:
-- Offer 3 to 5 "threads" worth pulling to go deeper: each a specific concept, mechanism, term, result, or open question a technically-minded listener could investigate next — grounded in the synthesis above and the intended meaning.
+- Offer 3 to 5 "threads" worth pulling to go deeper: each a specific concept, mechanism, term, result, or open question a technically-minded listener could investigate next — grounded in the intended meaning above.
 - One thread per line. Each is a compact, self-contained pointer: name the thing, then a few words on what pulling it opens up. No numbering, no bullets, no markdown, no preamble.
 - Domain-specific and precise; prefer the concrete over the vague, and keep the whole set under ~100 words.`,
   },
+  /* CUSTOM — the listener's own task, and the one register that yields to it.
+     The other probes are authored instruments with a fixed shape; this one is
+     whatever was typed in the box. So the task governs: it sets the scope (one
+     rung, several rungs, the whole arc, or a step outside the deck), the depth
+     and the register, and the guidance below only fills what the task leaves
+     unsaid. The anchor arrives as a starting point rather than a fence — see
+     anchorFraming. */
   custom: {
     audience: "an engaged listener who may be lay or technical",
+    anchorFraming:
+      "THIS RUNG'S INTENDED MEANING — the listener asked from here, so this is where the answer starts. It anchors the task; it does not fence it. Follow the task wherever it leads, including across other rungs of the arc above or outside the deck entirely, and keep this accurate wherever it bears on the answer:",
     rules: `RULES:
-- Carry out the listener's request directly and honestly, grounded in the intended meaning above; if it strays beyond the slide, do it briefly and say so.
-- Accessible first, but you may use precise terms with a quick gloss where they earn their place.
-- At most 130 words. Plain prose only: no headings, no bullet points, no markdown.`,
+- The listener's TASK governs. Follow its direction, scope and depth. Where it asks for something these rules did not anticipate, the task wins — treat the rest of this list as defaults for whatever the task leaves unspecified.
+- Scope follows the task, not the slide. If it calls for comparing rungs, tracing a thread through the climb, standing back from the deck, or answering something the deck only touches in passing, do that fully and without apology or meta-commentary about leaving the slide.{{ARC_CLAUSE}}
+- Match the register the task implies — technical if it is technical, plain if it is plain — and match its form: a question wants an answer, a comparison wants a comparison, a request to be brief wants brevity.
+- Say so plainly if the task rests on a false premise, or if answering well needs something the deck does not contain; then give the best answer you can.
+- Default length about 130 words, but follow the task if it asks for shorter or longer. Plain prose only: no headings, no bullet points, no markdown — unless the task explicitly asks for a list, in which case use one line per item, no bullet characters.`,
   },
 };
 
@@ -100,16 +123,22 @@ const REGISTER_BY_PROBE = {
    HELPERS
    ------------------------------------------------------------ */
 
-/* A slide's synthesis seed may be a string or an array of variants. */
-function synthesisSeedOf(slide) {
-  const s = slide?.seeds?.synthesis;
-  return Array.isArray(s) ? s[0] || "" : s || "";
-}
+/* NOTE — `threads` used to be cross-fed the slide's first `synthesis` seed as
+   its base. It now pulls from the ANCHOR instead, which is already in every
+   prompt as INTENDED MEANING. Three reasons, in order of weight:
+     • The anchor is the ground truth; a seed is one rendering of it. Pulling
+       threads from a rendering means pulling from a lossy copy.
+     • The anchor carries what threads actually need — the cross-rung ties and
+       the "not this neighbour" boundaries (every slide has them) — which the
+       room-facing synthesis prose deliberately leaves out.
+     • It is seed-independent, so `threads` behaves identically whether or not
+       settings.loadSeeds is on, and drops a duplicated block from the prompt.
+   The seed lookup this replaced is gone; nothing else read it. */
 
 /* The anti-repetition block. `priorAnswers` is an array of strings —
    previously generated/shown texts the model should not echo. Truncated
    to a character budget so the prompt stays bounded. */
-function buildAvoidBlock(priorAnswers, charBudget) {
+function buildAvoidBlock(priorAnswers, charBudget, { soft = false } = {}) {
   if (!priorAnswers || priorAnswers.length === 0) return "";
   const joined = priorAnswers
     .filter(Boolean)
@@ -117,7 +146,14 @@ function buildAvoidBlock(priorAnswers, charBudget) {
     .join("\n")
     .slice(0, charBudget);
   if (!joined) return "";
-  return `\nDo NOT repeat the framing, analogies or examples of these earlier answers — reach for a genuinely fresh angle, and in particular do not reuse the same concrete example:\n${joined}`;
+  // Soft mode (custom): a directive not to repeat would fight a task that
+  // legitimately asks to revisit, extend or compare against what came before.
+  // So the earlier answers are given as context, and only redundancy is ruled
+  // out — the task still decides what to do with them.
+  const preamble = soft
+    ? `\nAlready said on this rung (context, not a constraint): unless the TASK asks you to build on, revisit or compare against these, avoid simply restating them — add something they do not already give:`
+    : `\nDo NOT repeat the framing, analogies or examples of these earlier answers — reach for a genuinely fresh angle, and in particular do not reuse the same concrete example:`;
+  return `${preamble}\n${joined}`;
 }
 
 /* The custom-task probe: the box now holds a TASK authored by the user (or a
@@ -153,27 +189,51 @@ export function buildPrompt(ctx) {
   } = ctx;
 
   const {
-    includeAbstract = INCLUDE_ABSTRACT,
+    includeAbstract = getSettings().includeAbstract,
     priorCharBudget = 2400,
   } = options;
 
   const register = REGISTER_BY_PROBE[probe.id] || DEFAULT_REGISTER;
   const { audience, rules } = register;
+  const anchorFraming = register.anchorFraming || DEFAULT_ANCHOR_FRAMING;
 
-  // `threads` is cross-fed the slide's technical synthesis as its base.
+  // `threads` pulls from the INTENDED MEANING above rather than a separate
+  // block: the anchor is already the richest statement of the rung, including
+  // the cross-rung ties and neighbour boundaries threads are made of. This
+  // just tells the model to read it that way.
   const context =
-    probe.id === "threads" && synthesisSeedOf(slide)
-      ? `\nTECHNICAL SYNTHESIS (the base to pull threads from):\n${synthesisSeedOf(slide)}\n`
+    probe.id === "threads"
+      ? `\nThe INTENDED MEANING above is the base to pull threads from: mine it for the mechanisms it names, the ties it draws to other rungs, and the boundaries it sets against neighbouring ones — the threads live there and just beyond it.\n`
       : "";
 
-  const avoid = buildAvoidBlock(priorAnswers, priorCharBudget);
+  const avoid = buildAvoidBlock(priorAnswers, priorCharBudget, {
+    soft: probe.id === "custom",
+  });
 
   const abstract = includeAbstract ? `${DECK_ABSTRACT}` : "";
+
+  // The custom rules invite the model to reach for the deck arc when a task is
+  // cross-cutting — but only if the arc is actually in the prompt. With
+  // includeAbstract off, that sentence would point at nothing, so it is dropped
+  // and the model is told to work from this rung alone.
+  const rulesResolved = rules.replace(
+    "{{ARC_CLAUSE}}",
+    includeAbstract
+      ? " Use the DECK ARC above as your map of the other rungs when the task is cross-cutting."
+      : " You have only this rung in front of you: if the task reaches for other rungs, work from what you know of the subject and say where you are inferring rather than reading off the deck."
+  );
 
   const languageDirective =
     OUTPUT_LANGUAGE_DIRECTIVE[outputLanguage] || OUTPUT_LANGUAGE_DIRECTIVE.fr;
 
-  return `You are the live explanation engine embedded in a lecture deck titled "${deckTitle}", for ${audience}. 
+  // The role line. For `custom` the audience is whoever the task implies, so
+  // asserting one here would compete with the task's own direction.
+  const roleLine =
+    probe.id === "custom"
+      ? `You are the live explanation engine embedded in a lecture deck titled "${deckTitle}". A listener has typed their own task into the box; carrying it out well is the whole job, and it may take you beyond the rung on screen. Pitch it for ${audience}, unless the task implies otherwise — then follow the task.`
+      : `You are the live explanation engine embedded in a lecture deck titled "${deckTitle}", for ${audience}. `;
+
+  return `${roleLine}
 
 ${abstract}
 
@@ -182,12 +242,12 @@ The lecturer is projecting this fragment on screen:
 FRAGMENT: "${slide.fragment}"
 SUBTEXT: "${slide.sub}"
 
-INTENDED MEANING: stay strictly inside this, it is the ground truth of the slide:
+${anchorFraming}
 ${slide.anchor}
 ${context}
 TASK: ${probe.task}${avoid}
 
-${rules}
+${rulesResolved}
 
 ${languageDirective}`;
 
